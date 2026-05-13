@@ -1,0 +1,24 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-studio-red: #9B2C2C;
+  --color-studio-bg: #F5F5F5;
+  --color-studio-border: #E2E2E2;
+  --color-studio-text: #333333;
+  --color-studio-muted: #888888;
+}
+
+@layer base {
+  body {
+    @apply bg-studio-bg text-studio-text font-sans antialiased;
+  }
+}
+
+.architect-grid {
+  background-image: radial-gradient(#E2E2E2 0.5px, transparent 0.5px);
+  background-size: 20px 20px;
+}
