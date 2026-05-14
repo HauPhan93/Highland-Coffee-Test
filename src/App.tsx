@@ -457,6 +457,8 @@ export default function App() {
         setError("AI Quota Exceeded: Please wait a moment before trying again.");
       } else if (errorMessage.toLowerCase().includes("high demand") || errorMessage.includes("503")) {
         setError("Server Busy: Google's AI servers are currently experiencing high demand. Please try again in a few moments.");
+      } else if (errorMessage.toLowerCase().includes("location is not supported") || errorMessage.toLowerCase().includes("region")) {
+        setError(`Region Error: This AI model is not yet available in your current location. Please try a different model or check availability in Google AI Studio.`);
       } else if (errorMessage.includes("model not found") || errorMessage.includes("not found")) {
         setError(`Model error: The selected AI model (${selectedModel}) might not be available yet in this region.`);
       } else if (errorMessage.includes("safety")) {
@@ -802,7 +804,7 @@ export default function App() {
                   <div className="space-y-3">
                     <div className="p-2.5 border border-studio-red/20 bg-white rounded-xl shadow-sm">
                       <div className="flex items-center justify-between mb-1 text-studio-red">
-                        <p className="text-[8px] font-black uppercase tracking-tighter">Visual & Document Intelligence</p>
+                        <p className="text-[8px] font-black uppercase tracking-tighter">Document Design study</p>
                         <div className={cn("w-1.5 h-1.5 rounded-full shadow-[0_0_8px_currentColor]", isAnalyzingContext ? "bg-amber-500 animate-pulse text-amber-500" : "bg-green-500 text-green-500")} />
                       </div>
                       <p className="text-[9px] text-studio-muted leading-relaxed font-medium">
@@ -1066,9 +1068,10 @@ export default function App() {
                     onChange={(e) => setSelectedModel(e.target.value)}
                     className="w-full px-2 py-1.5 border border-studio-border text-[9px] font-bold focus:border-studio-red outline-none rounded-lg"
                   >
-                    <option value="gemini-2.5-flash-image">Gemini Flash Image</option>
-                    <option value="imagen-3.0-generate-002">Imagen 3 (High Quality)</option>
-                    <option value="imagen-3.0-fast-generate-001">Imagen 3 Fast (Performance)</option>
+                    <option value="gemini-2.5-flash-image">Gemini Flash Image (Fast)</option>
+                    <option value="gemini-3.1-flash-image-preview">Imagen 3 Vision (HQ)</option>
+                    <option value="imagen-3.0-generate-001">Imagen 3 (Direct Render)</option>
+                    <option value="gemini-3-flash-preview">Gemini 3 Flash (Context Only)</option>
                   </select>
                 </div>
                 
