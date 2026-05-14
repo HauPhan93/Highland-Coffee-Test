@@ -17,13 +17,17 @@ export interface AnalysisResult {
 }
 
 export class ArchitectureService {
-  private ai: GoogleGenAI;
+  private aiInstance: GoogleGenAI | null = null;
 
-  constructor() {
-    if (!process.env.GEMINI_API_KEY) {
-      throw new Error("GEMINI_API_KEY is missing");
+  private get ai(): GoogleGenAI {
+    if (!this.aiInstance) {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("GEMINI_API_KEY is missing. Please configure it in your environment variables.");
+      }
+      this.aiInstance = new GoogleGenAI({ apiKey });
     }
-    this.ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    return this.aiInstance;
   }
 
   async analyzeImage(base64Image: string, mimeType: string, lang: 'EN' | 'VI' = 'EN'): Promise<string> {
