@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { architectureService } from './services/architectureService.ts';
 import { cn } from './lib/utils.ts';
+import BimViewer from './components/BimViewer.tsx';
 
 /**
  * @license
@@ -28,11 +29,36 @@ export default function App() {
   const [suggestions, setSuggestions] = useState<{role: 'user' | 'ai', content: string}[]>([]);
   const [showAppsMenu, setShowAppsMenu] = useState(false);
   const [activeApp, setActiveApp] = useState<'VISUAL_DESIGN' | 'BIM_BREAKDOWN' | 'LIBRARY'>('VISUAL_DESIGN');
+  const [ifcFile, setIfcFile] = useState<File | null>(null);
+  const [isProcessingIfc, setIsProcessingIfc] = useState(false);
+  const [bimAttachments, setBimAttachments] = useState<{name: string, type: string}[]>([]);
   const userEmail = "hau1412159@gmail.com";
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const refFileInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
+  const ifcInputRef = useRef<HTMLInputElement>(null);
+  const bimAttachmentRef = useRef<HTMLInputElement>(null);
+
+  const handleIfcChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setIfcFile(file);
+      setIsProcessingIfc(true);
+      // Simulate processing time
+      setTimeout(() => {
+        setIsProcessingIfc(false);
+      }, 3000);
+    }
+  };
+
+  const handleBimAttachment = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files) {
+      const newFiles = Array.from(files).map(f => ({ name: f.name, type: f.type }));
+      setBimAttachments(prev => [...prev, ...newFiles]);
+    }
+  };
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1225,101 +1251,260 @@ export default function App() {
             <div className="absolute inset-0 opacity-5 pointer-events-none" 
               style={{ backgroundImage: 'radial-gradient(circle, #333 1px, transparent 1px)', backgroundSize: '24px 24px' }} 
             />
-            
             {/* BIM Breakdown Header */}
-            <div className="p-8 pb-4 flex items-center justify-between z-10">
+            <div className="p-6 pb-2 flex items-center justify-between z-10">
               <div className="flex items-center gap-4">
-                <div className="w-16 h-16 bg-studio-red flex items-center justify-center rounded-2xl shadow-xl shadow-studio-red/20">
-                  <Layers className="w-8 h-8 text-white" />
+                <div className="w-14 h-14 bg-studio-red flex items-center justify-center rounded-2xl shadow-xl shadow-studio-red/20">
+                  <Layers className="w-7 h-7 text-white" />
                 </div>
                 <div>
-                  <h1 className="text-2xl font-black text-studio-black tracking-widest uppercase">BIM Breakdown Dashboard</h1>
-                  <p className="text-[10px] font-bold text-studio-muted tracking-[0.3em] uppercase mt-1 italic">Quantity Takeoff & Construction Data Integration</p>
+                  <h1 className="text-xl font-extrabold text-studio-black tracking-widest uppercase">BIM Breakdown Dashboard</h1>
+                  <p className="text-[9px] font-bold text-studio-muted tracking-[0.3em] uppercase mt-0.5 italic">Quantity Takeoff & Construction Data Integration</p>
                 </div>
               </div>
-              <div className="flex items-center gap-3">
-                <button className="px-4 py-2 bg-white border border-studio-border text-[9px] font-black uppercase tracking-widest rounded-lg shadow-sm hover:bg-studio-bg transition-all active:scale-95">Export IFC</button>
-                <button className="px-4 py-2 bg-studio-black text-white text-[9px] font-black uppercase tracking-widest rounded-lg shadow-xl shadow-black/10 active:scale-95 transition-all">Submit Review</button>
+              <div className="flex items-center gap-6">
+                {/* Compact Budget Display */}
+                <div className="flex items-center gap-3 px-4 py-2 bg-white border border-studio-border rounded-xl shadow-sm">
+                  <div className="flex flex-col">
+                    <span className="text-[7px] font-black text-studio-muted uppercase tracking-wider text-right">Estimated Total</span>
+                    <span className="text-sm font-black text-studio-red tracking-tighter leading-none">$154,200 <span className="text-[8px] text-studio-muted italic">USD</span></span>
+                  </div>
+                  <div className="w-[1px] h-6 bg-studio-border" />
+                  <div className="flex flex-col">
+                    <span className="text-[7px] font-black text-studio-muted uppercase tracking-wider">Quota</span>
+                    <span className="text-[9px] font-bold text-studio-black">65% <span className="text-studio-red">▲</span></span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <button className="px-4 py-2 bg-white border border-studio-border text-[9px] font-black uppercase tracking-widest rounded-lg shadow-sm hover:bg-studio-bg transition-all active:scale-95">Export IFC</button>
+                  <button className="px-4 py-2 bg-studio-black text-white text-[9px] font-black uppercase tracking-widest rounded-lg shadow-xl shadow-black/10 active:scale-95 transition-all">Submit Review</button>
+                </div>
               </div>
             </div>
 
-            <div className="flex-1 p-8 pt-4 flex gap-8 overflow-hidden">
-              {/* Left Column: Data Structure */}
-              <div className="w-[350px] flex flex-col gap-6">
-                <div className="flex-1 bg-white border border-studio-border shadow-xl rounded-3xl p-6 flex flex-col overflow-hidden">
+            <div className="flex-1 p-6 pt-2 flex gap-6 overflow-hidden">
+              {/* ZONE 1: Model & 3D Viewport (Left) */}
+              <div className="w-[320px] flex flex-col gap-6">
+                <div className="flex-1 bg-white border border-studio-border shadow-xl rounded-2xl p-6 flex flex-col overflow-hidden">
                   <div className="flex items-center justify-between mb-6">
-                    <span className="text-[10px] font-black text-studio-muted uppercase tracking-widest">Model Hierarchy</span>
-                    <Plus className="w-4 h-4 text-studio-red cursor-pointer" />
+                    <span className="text-[10px] font-black text-studio-muted uppercase tracking-widest">3D Model Hierarchy & View</span>
+                    <button 
+                      onClick={() => ifcFile ? setIfcFile(null) : ifcInputRef.current?.click()}
+                      className={cn(
+                        "p-2 rounded-xl transition-all active:scale-90 shadow-sm border",
+                        ifcFile ? "bg-studio-red/10 border-studio-red/30 text-studio-red hover:bg-studio-red hover:text-white" : "bg-studio-bg border-studio-border text-studio-muted hover:border-studio-red"
+                      )}
+                    >
+                      {ifcFile ? <Trash2 className="w-4 h-4" /> : <Upload className="w-4 h-4" />}
+                    </button>
                   </div>
                   
-                  <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-                    {[
-                      { id: 'STR-01', name: 'Foundation & Footing', count: 12, status: 'Completed' },
-                      { id: 'ARC-02', name: 'Wall Interior - Type A', count: 45, status: 'In Review' },
-                      { id: 'ARC-03', name: 'Ceiling Finishes', count: 8, status: 'Draft' },
-                      { id: 'MEP-01', name: 'HVAC Distribution', count: 15, status: 'Pending' },
-                      { id: 'FF-01', name: 'Furniture & Fixtures', count: 22, status: 'Draft' }
-                    ].map(item => (
-                      <div key={item.id} className="p-4 border border-studio-border bg-studio-bg/30 rounded-2xl group hover:border-studio-red/30 transition-all cursor-pointer">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-[8px] font-mono text-studio-red">{item.id}</span>
-                          <span className={cn(
-                            "text-[7px] font-black uppercase px-2 py-0.5 rounded-full",
-                            item.status === 'Completed' ? "bg-green-100 text-green-700" :
-                            item.status === 'In Review' ? "bg-blue-100 text-blue-700" :
-                            "bg-amber-100 text-amber-700"
-                          )}>{item.status}</span>
-                        </div>
-                        <p className="text-[11px] font-black text-studio-black uppercase">{item.name}</p>
-                        <p className="text-[8px] text-studio-muted mt-1">{item.count} elements extracted from vision</p>
+                  {ifcFile ? (
+                    <div className="flex-1 flex flex-col gap-4">
+                       {/* 3D Viewport Wrapper */}
+                       <div className="relative aspect-[3/4] bg-studio-bg rounded-2xl border border-studio-border overflow-hidden group shadow-inner">
+                          {isProcessingIfc ? (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-studio-bg/80 backdrop-blur-sm z-20">
+                               <div className="relative w-20 h-20 mb-4">
+                                  <motion.div 
+                                    animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
+                                    transition={{ duration: 2, repeat: Infinity }}
+                                    className="absolute inset-0 bg-studio-red/20 rounded-full"
+                                  />
+                                  <div className="absolute inset-0 flex items-center justify-center">
+                                     <div className="w-10 h-10 border-2 border-studio-red border-t-transparent rounded-full animate-spin" />
+                                  </div>
+                               </div>
+                               <p className="text-[10px] font-black text-studio-red uppercase tracking-[0.2em] animate-pulse">Analyzing Geometry...</p>
+                               <p className="text-[8px] text-studio-muted font-bold mt-1 uppercase">Correlating vision with BIM data</p>
+                            </div>
+                          ) : (
+                            <motion.div 
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              className="absolute inset-0"
+                            >
+                               {/* Scanning Line Effect */}
+                               <motion.div 
+                                 animate={{ top: ['0%', '100%', '0%'] }}
+                                 transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+                                 className="absolute left-0 w-full h-[2px] bg-studio-red/40 shadow-[0_0_15px_rgba(153,27,27,0.5)] z-10 pointer-events-none opacity-50"
+                               />
+
+                               <div className="absolute inset-0">
+                                  <BimViewer />
+                               </div>
+                            </motion.div>
+                          )}
+
+                          {/* Viewport UI Controls */}
+                          <div className="absolute bottom-3 left-3 flex flex-col gap-2 z-10">
+                             <div className="flex bg-white/90 backdrop-blur-md border border-studio-border rounded-lg shadow-sm overflow-hidden">
+                                <button className="p-1.5 hover:bg-studio-red/10 transition-colors border-r border-studio-border">
+                                  <Layers className="w-3 h-3 text-studio-red" />
+                                </button>
+                                <button className="p-1.5 hover:bg-studio-red/10 transition-colors">
+                                  <SunMedium className="w-3 h-3 text-studio-muted" />
+                                </button>
+                             </div>
+                             <div className="px-2 py-1 bg-studio-black/80 backdrop-blur-md rounded-md">
+                               <p className="text-[7px] text-white font-mono tracking-tighter uppercase">FOV: 45° • FPS: 60</p>
+                             </div>
+                          </div>
+
+                          <div className="absolute top-3 right-3 z-10">
+                             <div className="w-8 h-8 rounded-full bg-white/80 border border-studio-border flex items-center justify-center shadow-lg">
+                               <div className="w-1 h-1 bg-studio-red rounded-full" />
+                             </div>
+                          </div>
+
+                          {/* Overlay Gradient */}
+                          <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-studio-bg to-transparent pointer-events-none" />
+                       </div>
+
+                       <div className="flex flex-col gap-1 px-1">
+                          <div className="flex items-center justify-between">
+                             <p className="text-[10px] font-black text-studio-black truncate uppercase">{ifcFile.name}</p>
+                             <span className="text-[8px] font-mono font-bold text-studio-red">94% SYNC</span>
+                          </div>
+                          <p className="text-[8px] text-studio-muted uppercase tracking-widest font-bold">LOD 400 • IFC 4.3 STANDARDS</p>
+                       </div>
+
+                       <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                         <div className="text-[8px] font-black text-studio-muted uppercase mb-2 tracking-widest opacity-50">Structural nodes</div>
+                         {[
+                           { name: 'Core Walls', count: '14 Elements' },
+                           { name: 'Floor Slabs', count: '8 Segments' },
+                           { name: 'Foundation Piles', count: '22 Nodes' }
+                         ].map((node, i) => (
+                           <div key={i} className="flex items-center justify-between p-2 hover:bg-studio-bg rounded-lg border border-transparent hover:border-studio-border transition-all cursor-pointer">
+                              <span className="text-[9px] font-bold text-studio-black">{node.name}</span>
+                              <span className="text-[8px] font-mono text-studio-muted">{node.count}</span>
+                           </div>
+                         ))}
+                       </div>
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-studio-border rounded-2xl bg-studio-bg/30 opacity-40 p-8 text-center gap-4 cursor-pointer hover:opacity-100 hover:border-studio-red transition-all" onClick={() => ifcInputRef.current?.click()}>
+                      <div className="w-16 h-16 rounded-full bg-studio-border/30 flex items-center justify-center">
+                        <Upload className="w-8 h-8 text-studio-muted" />
                       </div>
-                    ))}
+                      <div>
+                        <p className="text-[11px] font-black text-studio-black uppercase">Upload IFC Specification</p>
+                        <p className="text-[9px] text-studio-muted font-bold mt-1">Select 3D BIM data for 3D Viewport</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Middle Column (Model Health & Category Breakdown) */}
+              <div className="w-[350px] flex flex-col gap-6 overflow-hidden">
+                {/* ZONE 2: IFC Category Breakdown (Middle Top) */}
+                <div className="h-[55%] bg-white border border-studio-border shadow-xl rounded-2xl p-6 flex flex-col overflow-hidden relative">
+                   <div className="flex items-center justify-between mb-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-6 bg-studio-red rounded-full" />
+                        <h3 className="text-[11px] font-black text-studio-black uppercase tracking-widest">IFC Category Breakdown</h3>
+                      </div>
+                      <span className="text-[8px] font-mono font-bold text-studio-red bg-studio-red/5 px-2 py-0.5 rounded-md italic">Extracted from {ifcFile?.name || 'IFC.rvt'}</span>
+                   </div>
+                   
+                   <div className="flex-1 overflow-y-auto space-y-4 pr-1 custom-scrollbar">
+                      {[
+                        { cat: 'IfcWallStandardCase', count: 42, color: 'bg-blue-500', desc: 'Exterior & Interior Vertical Partitions' },
+                        { cat: 'IfcSlab / Floor', count: 12, color: 'bg-green-500', desc: 'Level 01 Main Floor & Mezzanine' },
+                        { cat: 'IfcColumn', count: 8, color: 'bg-orange-500', desc: 'Structural Support Grid 1-5' },
+                        { cat: 'IfcWindow', count: 15, color: 'bg-cyan-500', desc: 'Curtain Wall Facade Elements' },
+                        { cat: 'IfcDoor', count: 6, color: 'bg-purple-500', desc: 'Entrance & Service Access' },
+                        { cat: 'IfcFurniture', count: 24, color: 'bg-pink-500', desc: 'Highlands Standard Seating Units' }
+                      ].map((item, i) => (
+                        <div key={i} className="p-3 bg-studio-bg/50 border border-studio-border/30 rounded-xl hover:border-studio-red/30 transition-all cursor-pointer group">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <div className={cn("w-2 h-2 rounded-full", item.color)} />
+                              <span className="text-[10px] font-black text-studio-black uppercase">{item.cat}</span>
+                            </div>
+                            <span className="text-[10px] font-mono font-black text-studio-red">{item.count} <span className="text-[8px] text-studio-muted font-normal">ITEMS</span></span>
+                          </div>
+                          <p className="text-[8px] text-studio-muted uppercase tracking-wider font-bold mb-2">{item.desc}</p>
+                          <div className="h-1 bg-white rounded-full overflow-hidden">
+                             <motion.div 
+                               initial={{ width: 0 }}
+                               animate={{ width: `${(item.count / 107) * 100}%` }}
+                               className={cn("h-full", item.color)}
+                             />
+                          </div>
+                        </div>
+                      ))}
+                   </div>
+                </div>
+
+                {/* ZONE 4: Model Health & Sync Log (Middle Bottom) */}
+                <div className="flex-1 bg-white border border-studio-border shadow-xl rounded-2xl p-6 flex flex-col overflow-hidden relative">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-1.5 h-6 bg-studio-black rounded-full" />
+                    <h3 className="text-[11px] font-black text-studio-black uppercase tracking-widest">Analysis Logs</h3>
+                  </div>
+                  
+                  <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                     <div className="p-2 border border-orange-100 bg-orange-50/30 rounded-lg">
+                        <p className="text-[8.5px] font-bold text-orange-700 uppercase leading-relaxed">Geometry Clash Detected</p>
+                        <p className="text-[8px] text-orange-600/80 mt-0.5">Overlap in IfcWall vs IfcFlowTerminal zones.</p>
+                     </div>
+                     <div className="p-2 border border-studio-border bg-studio-bg/30 rounded-lg">
+                        <p className="text-[8px] text-studio-muted leading-relaxed italic">
+                          Model sync at {new Date().toLocaleTimeString()} successful. Data integrity score: 0.94.
+                        </p>
+                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Right Column: Detailed Takeoff & Material Estimates */}
-              <div className="flex-1 flex flex-col gap-6 overflow-hidden">
-                <div className="h-1/2 bg-white border border-studio-border shadow-xl rounded-3xl p-8 overflow-hidden flex flex-col">
+              {/* Right Column (ZONE 3 & ZONE 5) */}
+               <div className="flex-1 flex flex-col gap-6 overflow-hidden">
+                 {/* ZONE 3: Quantity Takeoff Summary */}
+                <div className="h-[60%] bg-white border border-studio-border shadow-2xl rounded-2xl p-8 flex flex-col overflow-hidden">
                   <div className="flex items-center justify-between mb-8">
                     <div className="flex items-center gap-3">
-                      <div className="w-1.5 h-6 bg-studio-red rounded-full" />
-                      <h3 className="text-sm font-black text-studio-black uppercase tracking-widest">Quantity Takeoff Summary</h3>
+                      <h3 className="text-sm font-black text-studio-black uppercase tracking-[0.2em]">Quantity Takeoff Summary</h3>
                     </div>
-                    <div className="text-[8px] font-mono text-studio-muted">LAST SYNC: 08:36:20</div>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                        <span className="text-[8px] font-mono text-studio-muted">LIVE_SYNC: ACTIVE</span>
+                      </div>
+                    </div>
                   </div>
                   
-                  <div className="flex-1 overflow-x-auto">
+                  <div className="flex-1 overflow-x-auto custom-scrollbar">
                     <table className="w-full text-left">
-                      <thead>
+                      <thead className="sticky top-0 bg-white z-10">
                         <tr className="border-b border-studio-border">
-                          <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest">Material Type</th>
-                          <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest">Estimated Qty</th>
+                          <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest">Classification</th>
+                          <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest">Material Specs</th>
+                          <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest">Qty Extracted</th>
                           <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest">Confidence</th>
-                          <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest">Unit Price</th>
                           <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest text-right">Subtotal</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-studio-border/50">
                         {[
-                          { name: 'Warm Oak Panel', qty: '124 m²', conf: '92%', price: '$45.00', total: '$5,580.00' },
-                          { name: 'Matte Black Steel (Ø12)', qty: '850 kg', conf: '88%', price: '$2.20', total: '$1,870.00' },
-                          { name: 'Polished Ceramic - Highlands Red', qty: '45 m²', conf: '95%', price: '$38.50', total: '$1,732.50' },
-                          { name: 'Industrial Concrete Floor', qty: '210 m²', conf: '98%', price: '$12.00', total: '$2,520.00' }
+                          { id: 'W01', name: 'Warm Oak Panel', qty: '124 m²', conf: '96%', total: '$5,580.00' },
+                          { id: 'S01', name: 'Matte Black Steel (Ø12)', qty: '850 kg', conf: '92%', total: '$1,870.00' },
+                          { id: 'T01', name: 'Ceramic - Highlands Red', qty: '45 m²', conf: '98%', total: '$1,732.50' },
+                          { id: 'F01', name: 'Industrial Concrete Floor', qty: '210 m²', conf: '95%', total: '$2,520.00' },
+                          { id: 'G01', name: 'Tempered Glass (12mm)', qty: '64 m²', conf: '88%', total: '$4,160.00' }
                         ].map((row, i) => (
-                          <tr key={i} className="hover:bg-studio-bg/50 transition-colors">
-                            <td className="py-4 text-[10px] font-bold text-studio-black">{row.name}</td>
+                          <tr key={i} className="hover:bg-studio-red/[0.02] transition-colors group">
+                            <td className="py-4 text-[9px] font-mono text-studio-red font-black">#{row.id}</td>
+                            <td className="py-4 text-[10px] font-bold text-studio-black uppercase">{row.name}</td>
                             <td className="py-4 text-[9px] font-mono text-studio-muted">{row.qty}</td>
                             <td className="py-4">
-                              <div className="flex items-center gap-2">
-                                <div className="w-12 h-1 bg-studio-bg rounded-full overflow-hidden">
-                                  <div className="h-full bg-green-500" style={{ width: row.conf }} />
-                                </div>
-                                <span className="text-[8px] font-bold text-green-600">{row.conf}</span>
-                              </div>
+                              <span className="px-2 py-0.5 bg-green-50 text-green-700 text-[8px] font-black rounded-full shadow-sm">{row.conf}</span>
                             </td>
-                            <td className="py-4 text-[9px] font-mono text-studio-muted">{row.price}</td>
-                            <td className="py-4 text-[9px] font-black text-studio-black text-right">{row.total}</td>
+                            <td className="py-4 text-[10px] font-black text-studio-black text-right">{row.total}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1327,37 +1512,57 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex-1 grid grid-cols-3 gap-6">
-                  <div className="bg-white border border-studio-border shadow-xl rounded-3xl p-6 flex flex-col justify-between">
-                    <p className="text-[9px] font-black text-studio-muted uppercase tracking-widest">Total Estimated Budget</p>
-                    <div className="mt-4">
-                      <span className="text-3xl font-black text-studio-red">$15,420</span>
-                      <span className="text-[10px] text-studio-muted ml-2">USD</span>
-                    </div>
-                    <div className="text-[8px] font-bold text-green-600 flex items-center gap-1 mt-2">
-                      <Plus className="w-2 h-2" /> 2.5% vs previous estimate
-                    </div>
-                  </div>
-                  <div className="bg-studio-black shadow-xl rounded-3xl p-6 flex flex-col justify-between">
-                    <p className="text-[9px] font-black text-white/50 uppercase tracking-widest">Sync Health</p>
-                    <div className="mt-4 flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-full border-4 border-studio-red border-t-white animate-spin" />
-                      <span className="text-xl font-black text-white uppercase italic">94.2%</span>
-                    </div>
-                    <div className="text-[8px] font-bold text-white/40 uppercase tracking-widest mt-2">RVT-Studio Integration Active</div>
-                  </div>
-                  <div className="bg-white border border-studio-border shadow-xl rounded-3xl p-6 flex flex-col justify-between group cursor-pointer hover:border-studio-red transition-all">
-                    <p className="text-[9px] font-black text-studio-muted uppercase tracking-widest">Architectural Verification</p>
-                    <div className="mt-4 flex -space-x-2">
-                       {[1,2,3,4].map(i => (
-                         <div key={i} className="w-8 h-8 rounded-full border-2 border-white bg-studio-bg flex items-center justify-center overflow-hidden">
-                           <img src={`https://i.pravatar.cc/150?u=${i}`} alt="User" />
-                         </div>
-                       ))}
-                       <div className="w-8 h-8 rounded-full border-2 border-white bg-studio-red text-white flex items-center justify-center text-[8px] font-black">+3</div>
-                    </div>
-                    <div className="text-[8px] font-bold text-studio-red uppercase tracking-widest mt-2 group-hover:underline">Requests Pending Approval</div>
-                  </div>
+                {/* ZONE 5: Attachments & Documentation */}
+                <div className="flex-1 bg-white border border-studio-border shadow-xl rounded-2xl p-6 flex flex-col overflow-hidden relative">
+                   <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <Folder className="w-4 h-4 text-studio-red" />
+                        <h3 className="text-[10px] font-black text-studio-black uppercase tracking-widest">BIM Documentation & Shared Data</h3>
+                      </div>
+                      <button 
+                        onClick={() => bimAttachmentRef.current?.click()}
+                        className="text-[8px] font-black text-studio-red uppercase hover:underline"
+                      >Add Documents</button>
+                   </div>
+                   
+                   <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar">
+                      {bimAttachments.length > 0 ? (
+                        <div className="grid grid-cols-2 gap-3">
+                           {bimAttachments.map((f, i) => (
+                             <div key={i} className="p-3 border border-studio-border bg-studio-bg/30 rounded-xl flex items-center justify-between group">
+                               <div className="flex items-center gap-3 overflow-hidden">
+                                 <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center shrink-0 shadow-sm">
+                                   {f.name.endsWith('.pdf') ? <FileText className="w-4 h-4 text-red-500" /> : 
+                                    f.type.includes('image') ? <ImageIcon className="w-4 h-4 text-blue-500" /> : 
+                                    <Download className="w-4 h-4 text-studio-muted" />}
+                                 </div>
+                                 <div className="overflow-hidden">
+                                   <p className="text-[9px] font-black text-studio-black truncate uppercase">{f.name}</p>
+                                   <p className="text-[7.5px] text-studio-muted leading-tight">TAKE-OFF REF • SYNCED</p>
+                                 </div>
+                               </div>
+                               <button 
+                                 onClick={() => setBimAttachments(prev => prev.filter((_, idx) => idx !== i))}
+                                 className="w-6 h-6 rounded-lg hover:bg-studio-red hover:text-white flex items-center justify-center text-studio-muted transition-all opacity-0 group-hover:opacity-100"
+                               >
+                                 <Plus className="w-3 h-3 rotate-45" />
+                               </button>
+                             </div>
+                           ))}
+                        </div>
+                      ) : (
+                        <div 
+                          onClick={() => bimAttachmentRef.current?.click()}
+                          className="h-full border-2 border-dashed border-studio-border bg-studio-bg/20 rounded-2xl flex flex-col items-center justify-center text-center p-6 cursor-pointer hover:border-studio-red transition-all group"
+                        >
+                           <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm group-hover:scale-110 transition-transform">
+                             <Plus className="w-6 h-6 text-studio-red" />
+                           </div>
+                           <p className="text-[10px] font-black text-studio-black uppercase">Attach Take-off References</p>
+                           <p className="text-[8px] text-studio-muted mt-1 uppercase font-bold italic">Excel, PDF, or Site Images</p>
+                        </div>
+                      )}
+                   </div>
                 </div>
               </div>
             </div>
@@ -1398,6 +1603,23 @@ export default function App() {
         className="hidden" 
         multiple
         accept=".pdf,.doc,.docx,.txt" 
+      />
+
+      <input 
+        type="file" 
+        ref={ifcInputRef} 
+        onChange={handleIfcChange} 
+        className="hidden" 
+        accept=".ifc,.rvt" 
+      />
+
+      <input 
+        type="file" 
+        ref={bimAttachmentRef} 
+        onChange={handleBimAttachment} 
+        className="hidden" 
+        multiple
+        accept=".pdf,.xlsx,.xls,image/*" 
       />
 
       {/* Decorative corners/elements */}
