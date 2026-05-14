@@ -1,5 +1,5 @@
 import { useState, useRef, ChangeEvent } from 'react';
-import { Upload, Image as ImageIcon, Sparkles, Building2, Layers, SunMedium, Palette, ChevronLeft, Download, Plus, Trash2, Send } from 'lucide-react';
+import { Upload, Image as ImageIcon, Sparkles, Building2, Layers, SunMedium, Palette, ChevronLeft, Download, Plus, Trash2, Send, Folder, FileText, MessageSquare, Coffee, Lightbulb, Timer, ChevronDown, LayoutGrid } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { architectureService } from './services/architectureService.ts';
@@ -10,28 +10,82 @@ import { cn } from './lib/utils.ts';
  * SPDX-License-Identifier: Apache-2.0
  */
 
-type TabType = 'ELEMENTS' | 'MATERIALS' | 'SCORES';
+type TabType = 'ELEMENTS' | 'MATERIALS' | 'SCORES' | 'SUGGESTIONS';
 
 export default function App() {
+  const [assets, setAssets] = useState<string[]>([]);
+  const [refAssets, setRefAssets] = useState<string[]>([]);
   const [image, setImage] = useState<string | null>(null);
   const [imageUrl, setImageUrl] = useState('');
+  const [docs, setDocs] = useState<File[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('ELEMENTS');
   const [renderPrompt, setRenderPrompt] = useState('');
   const [customInstruction, setCustomInstruction] = useState('');
+  const [analysisLang, setAnalysisLang] = useState<'EN' | 'VI'>('EN');
+  const [suggestions, setSuggestions] = useState<{role: 'user' | 'ai', content: string}[]>([]);
+  const [showAppsMenu, setShowAppsMenu] = useState(false);
+  const [activeApp, setActiveApp] = useState<'VISUAL_DESIGN' | 'BIM_BREAKDOWN' | 'LIBRARY'>('VISUAL_DESIGN');
+  const userEmail = "hau1412159@gmail.com";
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const refFileInputRef = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      processImage(file);
+      processImage(file, 'library');
     }
   };
 
-  const processImage = (file: File) => {
+  const handleRefFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processImage(file, 'ref');
+    }
+  };
+
+  const canvasRef = useRef<HTMLDivElement>(null);
+
+  const handleSelectionStart = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!isSelectingRegion || !canvasRef.current) return;
+    
+    const rect = canvasRef.current.getBoundingClientRect();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    
+    const x = ((clientX - rect.left) / rect.width) * 100;
+    const y = ((clientY - rect.top) / rect.height) * 100;
+    
+    setSelectionRect({ x, y, w: 0, h: 0 });
+
+    const handleMove = (moveEvent: MouseEvent | TouchEvent) => {
+      const curX = 'touches' in moveEvent ? moveEvent.touches[0].clientX : moveEvent.clientX;
+      const curY = 'touches' in moveEvent ? moveEvent.touches[0].clientY : moveEvent.clientY;
+      
+      const newW = ((curX - rect.left) / rect.width) * 100 - x;
+      const newH = ((curY - rect.top) / rect.height) * 100 - y;
+      
+      setSelectionRect(prev => prev ? { ...prev, w: newW, h: newH } : null);
+    };
+
+    const handleUp = () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+      window.removeEventListener('touchmove', handleMove);
+      window.removeEventListener('touchend', handleUp);
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    window.addEventListener('touchmove', handleMove, { passive: false });
+    window.addEventListener('touchend', handleUp);
+  };
+
+  const processImage = (file: File, target: 'library' | 'ref') => {
     if (!file.type.startsWith('image/')) {
       setError('Please select an image file.');
       return;
@@ -40,64 +94,386 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const base64 = event.target?.result as string;
-      setImage(base64);
+      if (target === 'library') {
+        setAssets(prev => [base64, ...prev]);
+        setImage(base64);
+      } else {
+        setRefAssets(prev => [base64, ...prev]);
+      }
       setError(null);
-      setResult(null);
     };
     reader.readAsDataURL(file);
   };
 
-  const handleUrlAdd = async () => {
+  const handleUrlAdd = () => {
     if (!imageUrl) return;
-    try {
-      const response = await fetch(imageUrl);
-      const blob = await response.blob();
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImage(reader.result as string);
-        setError(null);
-        setResult(null);
-      };
-      reader.readAsDataURL(blob);
-    } catch (err) {
-      setError('Could not load image from this URL.');
+    setAssets(prev => [imageUrl, ...prev]);
+    setImage(imageUrl);
+    setImageUrl('');
+    setError(null);
+    setResult(null);
+  };
+
+  const handleDocChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files) {
+      setDocs(prev => [...prev, ...Array.from(files)]);
     }
+  };
+
+  const removeDoc = (index: number) => {
+    setDocs(prev => prev.filter((_, i) => i !== index));
   };
 
   const startAnalysis = async () => {
     if (!image) return;
     try {
       setAnalyzing(true);
-      const response = await architectureService.analyzeImage(image, 'image/jpeg'); 
+      let imageToAnalyze = image;
+      
+      // If image is a URL (starts with http), we try to convert it to base64 for Gemini
+      if (image.startsWith('http')) {
+        try {
+          const response = await fetch(image);
+          const blob = await response.blob();
+          imageToAnalyze = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
+        } catch (e) {
+          throw new Error('Could not process this image URL for analysis. Please download and upload it instead or use a CORS-friendly URL.');
+        }
+      }
+
+      const response = await architectureService.analyzeImage(imageToAnalyze, 'image/jpeg', analysisLang); 
       setResult(response);
-    } catch (err) {
+      
+      // Extract initial suggestion to the suggestions tab
+      const parts = response.split(/###\s+/);
+      const sugPart = parts.find(p => p.toUpperCase().includes('SUGGESTION') || p.toUpperCase().includes('ĐỀ XUẤT'));
+      if (sugPart) {
+        setSuggestions([{ role: 'ai', content: sugPart.split('\n').slice(1).join('\n').trim() }]);
+      }
+      
+    } catch (err: any) {
       console.error(err);
-      setError('An error occurred during analysis.');
+      setError(err.message || 'An error occurred during analysis.');
     } finally {
       setAnalyzing(false);
+    }
+  };
+
+  const handleConsultantChat = async () => {
+    if (!image || !customInstruction.trim() || analyzing) return;
+    
+    const userQuery = customInstruction.trim();
+    setSuggestions(prev => [...prev, { role: 'user', content: userQuery }]);
+    setCustomInstruction('');
+    setAnalyzing(true);
+    setActiveTab('SUGGESTIONS');
+
+    try {
+      let imageToAnalyze = image;
+      if (image.startsWith('http')) {
+        const response = await fetch(image);
+        const blob = await response.blob();
+        imageToAnalyze = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      const response = await architectureService.chatAboutArchitecture(imageToAnalyze, 'image/jpeg', userQuery, analysisLang);
+      setSuggestions(prev => [...prev, { role: 'ai', content: response }]);
+      
+      // If no main result yet, maybe we shouldn't trigger full analysis, but chat is fine
+    } catch (err: any) {
+      console.error(err);
+      setSuggestions(prev => [...prev, { role: 'ai', content: "Error: " + (err.message || "An error occurred.") }]);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const getTabContent = () => {
+    if (!result) return "";
+
+    const sections: Record<string, string> = {};
+    const parts = result.split(/###\s+/);
+    
+    parts.forEach(part => {
+      if (!part.trim()) return;
+      const lines = part.split('\n');
+      const header = lines[0].trim();
+      const content = lines.slice(1).join('\n').trim();
+      sections[header] = content;
+    });
+
+    const findContent = (keywords: string[]) => {
+      const header = Object.keys(sections).find(h => 
+        keywords.some(k => h.toUpperCase().includes(k.toUpperCase()))
+      );
+      return header ? `### ${header}\n\n${sections[header]}` : "";
+    };
+
+    if (activeTab === 'ELEMENTS') {
+      const style = findContent(['STYLE', 'PHONG CÁCH']);
+      const elements = findContent(['ELEMENTS', 'YẾU TỐ']);
+      return `${style}\n\n${elements}`.trim();
+    }
+
+    if (activeTab === 'MATERIALS') {
+      const mat = findContent(['MATERIALS', 'VẬT LIỆU']);
+      const sug = findContent(['SUGGESTION', 'ĐỀ XUẤT']);
+      return `${mat}\n\n${sug}`.trim();
+    }
+
+    if (activeTab === 'SCORES') {
+      const scores = findContent(['SCORES', 'THANG ĐIỂM']);
+      const prompt = findContent(['PROMPT']);
+      return `${scores}\n\n${prompt}`.trim();
+    }
+
+    if (activeTab === 'SUGGESTIONS') {
+      if (suggestions.length === 0) return "No suggestions yet. Ask the AI Consultant for advice.";
+      return suggestions.map(s => `**${s.role === 'user' ? 'Client Request' : 'AI Consultant'}:**\n\n${s.content}`).join('\n\n---\n\n');
+    }
+
+    return result;
+  };
+
+  const getAverageScore = () => {
+    if (!result) return null;
+    const scoreRegex = /\|\s*[^|]+\s*\|\s*(\d+)\s*\|/g;
+    let match;
+    const scores: number[] = [];
+    while ((match = scoreRegex.exec(result)) !== null) {
+      const score = parseInt(match[1]);
+      if (!isNaN(score)) scores.push(score);
+    }
+    if (scores.length === 0) return null;
+    const sum = scores.reduce((a, b) => a + b, 0);
+    return Math.round(sum / scores.length);
+  };
+
+  const [selectedModel, setSelectedModel] = useState('Standard Model (Free)');
+  const [selectedAspectRatio, setSelectedAspectRatio] = useState('1:1');
+  const [isSelectingRegion, setIsSelectingRegion] = useState(false);
+  const [selectionRect, setSelectionRect] = useState<{x: number, y: number, w: number, h: number} | null>(null);
+  const [variantsCount, setVariantsCount] = useState(1);
+  const [renderOutputs, setRenderOutputs] = useState<string[]>([]);
+  const [activeVariantIndex, setActiveVariantIndex] = useState(0);
+  const [rendering, setRendering] = useState(false);
+  
+  const handleRender = () => {
+    if (!image) {
+      setError('Please upload an image first.');
+      return;
+    }
+    
+    setRendering(true);
+    setRenderOutputs([]);
+    setActiveVariantIndex(0);
+    
+    // Simulate rendering process based on variantsCount
+    setTimeout(() => {
+      const highlandVisions = [
+        'https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&q=80&w=1000',
+        'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&q=80&w=1000',
+        'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&q=80&w=1000',
+        'https://images.unsplash.com/photo-1518005020251-5829678ec8c4?auto=format&fit=crop&q=80&w=1000'
+      ];
+
+      const newOutputs: string[] = [];
+      for (let i = 0; i < variantsCount; i++) {
+        if (selectedModel === 'Standard (Free)') {
+           newOutputs.push(image);
+        } else {
+           const randomVision = highlandVisions[(Math.floor(Math.random() * highlandVisions.length) + i) % highlandVisions.length];
+           newOutputs.push(randomVision);
+        }
+      }
+      
+      setRenderOutputs(newOutputs);
+      setRendering(false);
+    }, 1500 * variantsCount); // Scale wait time by count
+  };
+
+  const handleSave = async () => {
+    const activeOutput = renderOutputs[activeVariantIndex];
+    if (!activeOutput) return;
+    
+    try {
+      const response = await fetch(activeOutput);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `highlands-render-v${activeVariantIndex + 1}.jpg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      const link = document.createElement('a');
+      link.href = activeOutput;
+      link.target = '_blank';
+      link.download = `highlands-render-v${activeVariantIndex + 1}.jpg`;
+      link.click();
+    }
+  };
+
+  const handleAddToLibrary = () => {
+    const activeOutput = renderOutputs[activeVariantIndex];
+    if (activeOutput) {
+      if (assets.includes(activeOutput)) {
+        // Just flash the library section if already exists
+        const assetSection = document.getElementById('image-assets-section');
+        assetSection?.scrollIntoView({ behavior: 'smooth' });
+        return;
+      }
+      setAssets(prev => [activeOutput, ...prev]);
+      
+      // Also set it as the current active image for further work
+      setImage(activeOutput);
+      setResult(null);
+
+      // Scroll to library
+      const assetSection = document.getElementById('image-assets-section');
+      assetSection?.scrollIntoView({ behavior: 'smooth' });
     }
   };
 
   return (
     <div className="h-screen flex flex-col font-sans text-studio-text overflow-hidden">
       {/* Header */}
-      <header className="h-16 px-6 border-b border-studio-border bg-white flex items-center justify-between z-10">
-        <div className="flex items-center gap-6">
+      <header className="h-16 px-4 border-b border-studio-border bg-white flex items-center justify-between z-50">
+        <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-studio-red flex items-center justify-center text-white text-xs font-bold leading-none">H</div>
-            <div>
-              <div className="text-[10px] font-bold tracking-[0.2em] leading-tight text-studio-black">HIGHLANDS AI STUDIO</div>
-              <div className="text-[8px] tracking-[0.1em] text-studio-muted leading-tight uppercase font-medium">ARCHITECTURE VISION SYSTEM</div>
+            <div className="w-[56px] h-[56px] flex items-center justify-center p-0.5">
+              <img 
+                src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/Highlands_Coffee_5G.svg/3840px-Highlands_Coffee_5G.svg.png" 
+                alt="Highlands Logo" 
+                className="w-full h-full object-contain"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+            <div className="flex flex-col justify-center">
+              <div className="text-[7.2px] font-bold tracking-[0.15em] leading-tight text-studio-black">HIGHLANDS AI STUDIO</div>
+              <div className="text-[6px] tracking-[0.05em] text-studio-muted leading-tight uppercase font-medium">ARCHITECTURE VISION SYSTEM</div>
             </div>
           </div>
           <div className="h-8 w-px bg-studio-border" />
-          <div className="flex items-center gap-4">
-            <span className="text-xl font-black tracking-[0.2em] text-studio-red uppercase">HIGHLANDS COFFEE</span>
-            <div className="h-6 w-px bg-studio-border opacity-50" />
-            <span className="text-[9px] font-medium tracking-widest text-studio-muted uppercase italic">Architectural Heritage</span>
+          <div className="flex items-center gap-3">
+            <span className="text-[22px] font-black font-sans text-studio-red uppercase inline-block origin-left scale-x-[1.5] mr-[120px]">HIGHLANDS COFFEE</span>
+            <div className="h-5 w-px bg-studio-border opacity-50" />
+            <span className="text-[8.5px] font-medium tracking-widest text-studio-muted uppercase italic">CONSCIENTIOUS</span>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-6">
+          <div className="flex flex-col items-end gap-1 px-4 border-r border-studio-border">
+            <p className="text-[8px] leading-none font-bold text-studio-muted uppercase tracking-tighter">Imagen 3 API Access Required</p>
+            <p className="text-[7px] leading-none text-studio-muted opacity-60">Enable in Google AI Studio for production renders</p>
+          </div>
+          <div className="relative">
+            <button 
+              onClick={() => setShowAppsMenu(!showAppsMenu)}
+              className={cn(
+                "flex items-center gap-2 px-3 py-1.5 rounded-lg border border-studio-border transition-all active:scale-95",
+                showAppsMenu ? "bg-studio-red border-studio-red text-white shadow-lg" : "bg-white hover:bg-studio-bg"
+              )}
+            >
+              <LayoutGrid className={cn("w-3.5 h-3.5", showAppsMenu ? "text-white" : "text-studio-red")} />
+              <span className="text-[9px] font-black uppercase tracking-widest">Studio Apps</span>
+              <ChevronDown className={cn("w-3 h-3 transition-transform duration-300", showAppsMenu && "rotate-180")} />
+            </button>
+
+            <AnimatePresence>
+              {showAppsMenu && (
+                <>
+                  {/* Backdrop for closing */}
+                  <div 
+                    className="fixed inset-0 z-[60]" 
+                    onClick={() => setShowAppsMenu(false)}
+                  />
+                  
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute right-0 mt-3 w-[260px] bg-white border border-studio-border shadow-2xl rounded-2xl p-4 z-[70] overflow-hidden"
+                  >
+                    <div className="absolute top-0 left-0 w-full h-1 bg-studio-red" />
+                    <p className="text-[8px] font-black text-studio-muted uppercase tracking-[0.2em] mb-4">Select Ecosystem App</p>
+                    
+                    <div className="grid grid-cols-1 gap-2">
+                      <div 
+                        onClick={() => { setActiveApp('VISUAL_DESIGN'); setShowAppsMenu(false); }}
+                        className={cn(
+                          "p-3 border rounded-xl flex items-center gap-3 group cursor-pointer transition-all",
+                          activeApp === 'VISUAL_DESIGN' ? "bg-studio-red border-studio-red text-white" : "bg-studio-red/[0.03] border-studio-red/20 hover:bg-studio-red hover:text-white"
+                        )}
+                      >
+                        <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center", activeApp === 'VISUAL_DESIGN' ? "bg-white/20" : "bg-studio-red/10 group-hover:bg-white/20")}>
+                          <Building2 className={cn("w-4 h-4", activeApp === 'VISUAL_DESIGN' ? "text-white" : "text-studio-red group-hover:text-white")} />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[10px] font-black uppercase tracking-tight">VISUAL DESIGN</span>
+                          <span className="text-[7.5px] opacity-60 font-bold italic">{activeApp === 'VISUAL_DESIGN' ? 'Current Instance' : 'Open Workspace'}</span>
+                        </div>
+                      </div>
+
+                      <div 
+                        onClick={() => { setActiveApp('BIM_BREAKDOWN'); setShowAppsMenu(false); }}
+                        className={cn(
+                          "p-3 border rounded-xl flex items-center gap-3 group cursor-pointer transition-all",
+                          activeApp === 'BIM_BREAKDOWN' ? "bg-studio-red border-studio-red text-white" : "bg-studio-bg border-studio-border hover:border-studio-red/30 hover:bg-studio-red/5"
+                        )}
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-white border border-studio-border flex items-center justify-center overflow-hidden p-1">
+                          <img 
+                            src="https://p1.hiclipart.com/preview/855/50/429/autodesk-logo-building-information-modeling-5d-bim-6d-bim-fourdimensional-space-4d-bim-threedimensional-space-fivedimensional-space-png-clipart.jpg" 
+                            alt="BIM Logo"
+                            className="w-full h-full object-contain"
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[10px] font-black uppercase tracking-tight text-studio-red group-hover:text-studio-red transition-colors">BIM BREAKDOWN</span>
+                          <span className="text-[7.5px] opacity-60 font-bold uppercase tracking-widest mt-0.5">{activeApp === 'BIM_BREAKDOWN' ? 'Active App' : 'Switch Workspace'}</span>
+                        </div>
+                      </div>
+
+                      <div 
+                        onClick={() => { setActiveApp('LIBRARY'); setShowAppsMenu(false); }}
+                        className={cn(
+                          "p-3 border rounded-xl flex items-center gap-3 group cursor-pointer transition-all",
+                          activeApp === 'LIBRARY' ? "bg-studio-red border-studio-red text-white" : "bg-studio-bg border-studio-border hover:border-studio-red/30 hover:bg-studio-red/5"
+                        )}
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-white border border-studio-border flex items-center justify-center">
+                          <Sparkles className="w-4 h-4 text-studio-muted group-hover:text-studio-red" />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[10px] font-black uppercase tracking-tight text-studio-red">LIBRARY</span>
+                          <span className="text-[7.5px] opacity-60 font-bold uppercase tracking-widest mt-0.5">Asset Hub</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-studio-border flex items-center justify-between">
+                      <span className="text-[7px] font-mono opacity-50 uppercase">User: {userEmail?.split('@')[0] || 'Studio_User'}</span>
+                      <button className="text-[7px] font-black text-studio-red uppercase hover:underline">Log Analytics</button>
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
             <span className="text-[9px] font-bold tracking-widest text-studio-muted uppercase">STANDBY</span>
@@ -106,232 +482,897 @@ export default function App() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex overflow-hidden architect-grid">
-        {/* Column 01: Image Assets */}
-        <section className="w-[340px] flex flex-col border-r border-studio-border bg-white/50 backdrop-blur-sm">
+      <main className="flex-1 flex overflow-hidden">
+        {activeApp === 'VISUAL_DESIGN' ? (
+          <>
+            {/* Column 01: Image Assets */}
+            <section id="image-assets-section" className="w-[330px] flex flex-col border-r border-studio-border bg-white/50 backdrop-blur-sm">
           <div className="p-4 border-b border-studio-border flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="w-5 h-5 flex items-center justify-center border border-studio-red text-[8px] font-bold text-studio-red leading-none">01</span>
-              <h2 className="text-[10px] font-bold tracking-[0.2em] uppercase">Image Assets</h2>
+              <span className="w-11 h-11 flex items-center justify-center border-2 border-studio-red text-[12px] font-black text-studio-red leading-none rounded-xl">01</span>
+              <h2 className="text-[10px] font-bold tracking-[0.2em] uppercase">Information assets</h2>
             </div>
-            <div className="px-2 py-0.5 border border-studio-border text-[8px] font-mono text-studio-muted">00 files</div>
+            <div className="px-2 py-0.5 border border-studio-border text-[8px] font-mono text-studio-muted">{assets.length.toString().padStart(2, '0')}</div>
           </div>
 
-          <div className="p-5 space-y-6 flex-1 flex flex-col">
-            {/* Drag and Drop Area */}
-            <div 
-              onClick={() => fileInputRef.current?.click()}
-              className="aspect-[4/3] border border-dashed border-studio-border flex flex-col items-center justify-center gap-3 cursor-pointer hover:bg-white transition-colors p-4 text-center group"
-            >
-              <Upload className="w-8 h-8 text-studio-muted group-hover:text-studio-red transition-colors" />
-              <div className="space-y-1">
-                <p className="text-[10px] font-medium leading-relaxed">Drag and drop images here<br/>or click to select file</p>
-                <p className="text-[8px] text-studio-muted tracking-widest uppercase">JPG · PNG · WEBP</p>
+          <div className="p-3 space-y-4 flex-1 flex flex-col overflow-hidden">
+            {/* Reference Document Area (Replacing URL Add) */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[8px] font-bold text-studio-muted uppercase tracking-widest">Document Ref</span>
+                <span className="text-[7px] text-studio-muted opacity-60">AI Context</span>
               </div>
-            </div>
-
-            <div className="flex gap-1">
-              <input 
-                type="text" 
-                placeholder="https://... Image URL" 
-                className="flex-1 px-3 py-1.5 border border-studio-border text-[10px] outline-none focus:border-studio-red/50"
-                value={imageUrl}
-                onChange={(e) => setImageUrl(e.target.value)}
-              />
               <button 
-                onClick={handleUrlAdd}
-                className="px-3 py-1.5 bg-studio-red text-white text-[9px] font-bold uppercase transition-colors hover:bg-studio-red/90"
+                onClick={() => docInputRef.current?.click()}
+                className="w-full py-1.5 border border-dashed border-studio-border bg-white/30 hover:bg-white hover:border-studio-red/50 transition-all flex items-center justify-center gap-2 group rounded-xl"
               >
-                ADD
+                <Folder className="w-3 h-3 text-studio-muted group-hover:text-studio-red" />
+                <span className="text-[9px] font-bold text-studio-muted group-hover:text-studio-red uppercase">Upload Reference</span>
               </button>
             </div>
 
-            <div className="flex-1 flex flex-col items-center justify-center text-studio-muted gap-2 border-t border-studio-border pt-10">
-              <span className="text-[10px] tracking-widest uppercase opacity-40">No Files</span>
-              <span className="text-[8px] tracking-widest uppercase opacity-40">Upload to begin</span>
+            {/* List of uploaded documents */}
+            {docs.length > 0 && (
+              <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
+                {docs.map((doc, idx) => (
+                  <div key={idx} className="flex items-center justify-between p-1.5 bg-white border border-studio-border group rounded-lg">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <FileText className="w-2.5 h-2.5 text-studio-red flex-shrink-0" />
+                      <span className="text-[8px] text-studio-text truncate font-medium">{doc.name}</span>
+                    </div>
+                    <button onClick={() => removeDoc(idx)} className="opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Plus className="w-2.5 h-2.5 text-studio-muted hover:text-studio-red rotate-45" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[8px] font-bold text-studio-muted uppercase tracking-widest">Library Image</span>
+              <span className="text-[8px] text-studio-muted underline cursor-pointer hover:text-studio-red" onClick={() => setAssets([])}>Clear</span>
             </div>
 
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                 <div className="h-px bg-studio-red flex-1" />
-                 <span className="text-[9px] font-bold tracking-widest uppercase text-studio-red">Render Request Description</span>
+            <div className="flex-1 overflow-y-auto pr-1">
+              <div className="grid grid-cols-3 gap-1.5">
+                {/* Small Import Button (Red Box) */}
+                <div 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="aspect-square border border-dashed border-studio-red bg-studio-red/5 flex flex-col items-center justify-center gap-0.5 cursor-pointer hover:bg-studio-red/10 transition-all text-center group active:scale-95 rounded-xl"
+                >
+                  <Upload className="w-4 h-4 text-studio-red" />
+                  <p className="text-[7px] font-black text-studio-red uppercase tracking-tighter">IMPORT</p>
+                </div>
+
+                {/* Asset tiles (Blue area) */}
+                {assets.map((ast, idx) => (
+                  <motion.div 
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    key={idx} 
+                    onClick={() => {
+                      setImage(ast);
+                      setResult(null);
+                    }}
+                    className={cn(
+                      "aspect-square border cursor-pointer overflow-hidden relative group transition-all rounded-xl",
+                      image === ast ? "border-studio-red ring-1 ring-studio-red ring-offset-1 shadow-sm" : "border-studio-border hover:border-studio-muted"
+                    )}
+                  >
+                    <img src={ast} alt={`Asset ${idx}`} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAssets(prev => prev.filter((_, i) => i !== idx));
+                        if (image === ast) setImage(null);
+                      }}
+                      className="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-white/90 border border-studio-border rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                    >
+                      <Trash2 className="w-2 h-2 text-studio-muted hover:text-studio-red" />
+                    </button>
+                  </motion.div>
+                ))}
+
+                {assets.length === 0 && (
+                  <div className="aspect-square border border-dashed border-studio-border flex flex-col items-center justify-center text-studio-muted opacity-10">
+                    <ImageIcon className="w-3 h-3" />
+                  </div>
+                )}
               </div>
-              <div className="relative">
-                <textarea 
-                  className="w-full h-24 p-3 border border-studio-border text-[10px] leading-relaxed resize-none outline-none focus:border-studio-red/50 bg-white"
-                  placeholder="Describe what you want in the render. E.g.: 2-story Mediterranean style house, red tile roof..."
-                  value={renderPrompt}
-                  onChange={(e) => setRenderPrompt(e.target.value)}
-                  maxLength={500}
-                />
-                <div className="absolute bottom-2 right-2 text-[8px] text-studio-muted">{renderPrompt.length} / 500</div>
+            </div>
+
+            {/* AI Context Analysis Section */}
+            <div className="mt-auto border-t border-studio-border bg-studio-red/[0.02] p-4 min-h-[180px] max-h-[180px] overflow-hidden flex flex-col">
+              <div className="flex items-center justify-between mb-3 text-studio-red">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 relative flex items-center justify-center">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-full h-full">
+                      <circle cx="12" cy="12" r="10" />
+                      <motion.line
+                        x1="12" y1="12" x2="12" y2="7"
+                        animate={analyzing ? { rotate: 360 } : { rotate: 0 }}
+                        transition={analyzing ? { duration: 2, repeat: Infinity, ease: "linear" } : { duration: 0.5 }}
+                        style={{ originX: "12px", originY: "12px" }}
+                      />
+                    </svg>
+                  </div>
+                  <span className="text-[9px] font-black uppercase tracking-[0.2em]">AI Context Analysis</span>
+                </div>
+                <div className="px-1.5 py-0.5 border border-studio-red/30 text-[7px] font-mono opacity-50 uppercase">V_ENGINE_4.0</div>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto pr-1">
+                {assets.length > 0 || docs.length > 0 ? (
+                  <div className="space-y-3">
+                    <div className="p-2.5 border border-studio-red/20 bg-white rounded-xl shadow-sm">
+                      <div className="flex items-center justify-between mb-1 text-studio-red">
+                        <p className="text-[8px] font-black uppercase tracking-tighter">Visual Intelligence</p>
+                        <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse shadow-[0_0_8px_#22c55e]" />
+                      </div>
+                      <p className="text-[9px] text-studio-muted leading-relaxed font-medium">
+                        Highlands Brand DNA detected: Extracted warm oak textures, industrial matte black accents, and optimized 3000K counter-flow lighting from user references.
+                      </p>
+                    </div>
+                    <div className="p-2.5 border border-studio-border bg-white/50 rounded-xl">
+                      <p className="text-[8px] font-black text-studio-muted mb-1.5 uppercase tracking-tighter">Material Correlation</p>
+                      <div className="flex flex-wrap gap-1">
+                        {['Earthy Tones', 'Ceramic Tiles', 'Ambient Glow', 'Brand Red', 'Industrial'].map(tag => (
+                          <span key={tag} className="px-2 py-0.5 bg-studio-border/30 text-[7px] font-mono font-bold uppercase tracking-tighter text-studio-muted border border-studio-border rounded-md lowercase">{tag}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center opacity-30 text-center py-4">
+                    <div className="w-10 h-10 rounded-full border border-dashed border-studio-red mb-3 flex items-center justify-center animate-pulse">
+                      <div className="w-2 h-2 bg-studio-red rotate-45" />
+                    </div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-studio-red">Awaiting Space...</p>
+                    <p className="text-[8px] mt-1 font-bold italic text-studio-muted">Knowledge graph will propagate once assets are uploaded</p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </section>
 
         {/* Column 02: Analysis */}
-        <section className="flex-1 flex flex-col border-r border-studio-border">
-          <div className="p-4 border-b border-studio-border flex items-center justify-between bg-white/50 backdrop-blur-sm">
+        <section className="w-[450px] flex flex-col border-r border-studio-border bg-white shadow-sm overflow-hidden shrink-0">
+          <div className="p-4 border-b border-studio-border flex items-center justify-between bg-white z-10">
             <div className="flex items-center gap-2">
-              <span className="w-5 h-5 flex items-center justify-center border border-studio-red text-[8px] font-bold text-studio-red leading-none">02</span>
+              <span className="w-11 h-11 flex items-center justify-center border-2 border-studio-red text-[12px] font-black text-studio-red leading-none rounded-xl">02</span>
               <h2 className="text-[10px] font-bold tracking-[0.2em] uppercase">Architectural Analysis</h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[8px] font-mono text-studio-muted uppercase">Vision v1.0</span>
             </div>
           </div>
 
           <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Analysis Image Display - Adjusted for better visibility */}
-            <div className="flex-1 bg-[#F0F0F0] border-b border-studio-border relative overflow-hidden flex items-center justify-center p-4">
-              {image ? (
-                <div className="relative w-full h-full flex items-center justify-center border border-studio-border bg-white shadow-inner overflow-hidden">
-                  <img src={image} alt="Selected" className="max-w-full max-h-full object-contain" />
-                  <div className="absolute top-2 left-2 px-2 py-1 bg-black/50 text-[8px] text-white font-mono uppercase tracking-widest backdrop-blur-sm">Source View</div>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center gap-4 text-studio-muted">
-                   <ImageIcon className="w-12 h-12 opacity-20" />
-                   <span className="text-[10px] tracking-widest uppercase opacity-40">No image selected</span>
-                </div>
-              )}
-              {analyzing && (
-                <div className="absolute inset-0 bg-white/70 backdrop-blur-[2px] flex flex-col items-center justify-center z-10 gap-3">
-                  <div className="w-10 h-10 border-2 border-studio-red border-t-transparent rounded-full animate-spin" />
-                  <span className="text-[9px] font-bold tracking-[0.2em] text-studio-red uppercase">Scanning Architecture...</span>
-                </div>
-              )}
-            </div>
-
-            <div className="p-4 flex gap-2 border-b border-studio-border bg-white shadow-sm">
-              <button 
-                onClick={startAnalysis}
-                disabled={!image || analyzing}
-                className="px-6 py-2 bg-studio-border text-studio-muted text-[10px] font-bold uppercase flex items-center gap-2 transition-all hover:bg-studio-red hover:text-white disabled:opacity-50 disabled:hover:bg-studio-border disabled:hover:text-studio-muted"
-              >
-                <Sparkles className="w-3 h-3" />
-                Analyse
-              </button>
-              <input 
-                type="text" 
-                placeholder="Custom instruction (optional)..." 
-                className="flex-1 px-3 py-2 border border-studio-border text-[10px] outline-none focus:border-studio-red/50"
-                value={customInstruction}
-                onChange={(e) => setCustomInstruction(e.target.value)}
-              />
-            </div>
-
-            {/* Tabs */}
-            <div className="flex border-b border-studio-border bg-white">
-              {(['ELEMENTS', 'MATERIALS', 'SCORES'] as TabType[]).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
+            {/* Top Workspace: Split View */}
+            <div className="h-[430px] flex border-b border-studio-border">
+              {/* Main Workspace (Left) */}
+              <div className="flex-1 bg-[#F5F5F5] relative group flex flex-col">
+                <div 
+                  ref={canvasRef}
+                  onMouseDown={handleSelectionStart}
+                  onTouchStart={handleSelectionStart}
                   className={cn(
-                    "flex-1 py-3 text-[10px] font-bold tracking-widest transition-all relative",
-                    activeTab === tab ? "text-studio-red" : "text-studio-muted border-l border-studio-border first:border-l-0"
+                    "flex-1 relative overflow-hidden flex items-center justify-center p-2",
+                    isSelectingRegion && "cursor-crosshair"
                   )}
                 >
-                  {tab}
-                  {activeTab === tab && (
-                    <motion.div layoutId="tab-active" className="absolute bottom-0 left-0 w-full h-[2px] bg-studio-red" />
+                  {image ? (
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="relative w-full h-full flex items-center justify-center select-none"
+                    >
+                      <img src={image} alt="Source" className="max-w-full max-h-full object-contain shadow-2xl pointer-events-none" />
+                      <div className="absolute top-2 left-2 px-2 py-1 bg-black/40 text-[7px] text-white font-mono uppercase tracking-[0.3em] backdrop-blur-sm border border-white/10">Source_Canvas</div>
+                      
+                      {/* Selection Overlay */}
+                      {selectionRect && (
+                        <div 
+                          className="absolute border-2 border-cyan-500 bg-cyan-500/10 shadow-[0_0_20px_rgba(6,182,212,0.3)]"
+                          style={{
+                            left: `${selectionRect.w < 0 ? selectionRect.x + selectionRect.w : selectionRect.x}%`,
+                            top: `${selectionRect.h < 0 ? selectionRect.y + selectionRect.h : selectionRect.y}%`,
+                            width: `${Math.abs(selectionRect.w)}%`,
+                            height: `${Math.abs(selectionRect.h)}%`,
+                          }}
+                        >
+                          <div className="absolute -top-6 left-0 bg-cyan-500 text-white text-[7px] font-black px-2 py-0.5 uppercase tracking-widest whitespace-nowrap">Selected Region</div>
+                          
+                          {/* Corner markers */}
+                          <div className="absolute top-0 left-0 w-1.5 h-1.5 bg-white border border-cyan-500 -translate-x-1/2 -translate-y-1/2" />
+                          <div className="absolute top-0 right-0 w-1.5 h-1.5 bg-white border border-cyan-500 translate-x-1/2 -translate-y-1/2" />
+                          <div className="absolute bottom-0 left-0 w-1.5 h-1.5 bg-white border border-cyan-500 -translate-x-1/2 translate-y-1/2" />
+                          <div className="absolute bottom-0 right-0 w-1.5 h-1.5 bg-white border border-cyan-500 translate-x-1/2 translate-y-1/2" />
+                        </div>
+                      )}
+                    </motion.div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-2 opacity-20">
+                      <ImageIcon className="w-8 h-8" />
+                      <span className="text-[8px] font-bold uppercase tracking-widest">Workspace Empty</span>
+                    </div>
                   )}
+ 
+                  {analyzing && (
+                    <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center z-10 gap-2">
+                      <div className="w-8 h-8 border-2 border-studio-red border-t-transparent rounded-full animate-spin" />
+                      <span className="text-[8px] font-black tracking-[0.3em] text-studio-red uppercase">Extracting...</span>
+                    </div>
+                  )}
+                </div>
+ 
+                {/* AI Discussion & Consultant (Moved here to the blue box position) */}
+                <div className="p-3 pb-8 bg-gradient-to-t from-black/5 to-transparent border-t border-studio-border/30">
+                  <div className="bg-white/90 backdrop-blur-md border border-studio-border shadow-lg p-2 space-y-2 rounded-2xl">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <MessageSquare className="w-2.5 h-2.5 text-studio-red" />
+                        <span className="text-[7.5px] font-black text-studio-muted uppercase tracking-widest">AI Consultant</span>
+                      </div>
+                      <select 
+                        value={analysisLang}
+                        onChange={(e) => setAnalysisLang(e.target.value as 'EN' | 'VI')}
+                        className="bg-studio-border/50 text-[7px] font-bold px-1 outline-none rounded-md cursor-pointer"
+                      >
+                        <option value="EN">EN</option>
+                        <option value="VI">VI</option>
+                      </select>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <textarea 
+                        placeholder="Discuss about improvements based on reference docs..." 
+                        className="flex-1 bg-transparent border-none p-0 text-[10px] min-h-[40px] max-h-24 resize-none outline-none font-medium leading-tight placeholder:text-neutral-400"
+                        value={customInstruction}
+                        onChange={(e) => setCustomInstruction(e.target.value)}
+                      />
+                      <button 
+                        onClick={handleConsultantChat}
+                        disabled={!image || !customInstruction.trim() || analyzing}
+                        className={cn(
+                          "w-10 h-10 shrink-0 bg-studio-red text-white flex items-center justify-center shadow-md active:scale-95 transition-all rounded-xl",
+                          image && !analyzing && customInstruction.trim() ? "hover:bg-studio-red/90" : "opacity-30 grayscale cursor-not-allowed"
+                        )}
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Technical Sidebar (Right vertical strip) */}
+              <div className="w-20 border-l border-studio-border bg-studio-bg/30 flex flex-col pt-6 p-2 pb-0 gap-2">
+                {/* Analyse Button (Replacing Ref Grid) */}
+                <button 
+                  onClick={startAnalysis}
+                  disabled={!image || analyzing}
+                  className={cn(
+                    "aspect-square border flex flex-col items-center justify-center gap-1 rounded-xl shadow-sm transition-all text-center p-1 group active:scale-95",
+                    image && !analyzing ? "bg-studio-red text-white border-studio-red hover:saturate-150" : "bg-neutral-200 text-neutral-400 border-studio-border"
+                  )}
+                >
+                  <Sparkles className={cn("w-4 h-4", analyzing && "animate-pulse")} />
+                  <span className="text-[8.5px] font-black uppercase tracking-tighter leading-none">{analyzing ? '...' : 'ANALYSE'}</span>
                 </button>
-              ))}
+                
+                <div className="flex-1 flex flex-col gap-1.5 pt-1">
+                  <div className="flex items-center gap-1 mb-1 px-1">
+                    <div className="h-px bg-studio-border flex-1" />
+                    <span className="text-[6px] font-bold text-studio-muted">VIEWS</span>
+                    <div className="h-px bg-studio-border flex-1" />
+                  </div>
+                  {(['ELEMENTS', 'MATERIALS', 'SCORES'] as TabType[]).map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      className={cn(
+                        "w-full aspect-square flex flex-col items-center justify-center gap-1 transition-all border rounded-xl relative group",
+                        activeTab === tab 
+                          ? "bg-white border-studio-red text-studio-red shadow-sm" 
+                          : "bg-neutral-50/50 border-transparent text-studio-muted hover:bg-white hover:border-studio-border"
+                      )}
+                    >
+                      {tab === 'ELEMENTS' && <Layers className="w-3.5 h-3.5" />}
+                      {tab === 'MATERIALS' && <Palette className="w-3.5 h-3.5" />}
+                      {tab === 'SCORES' && <Sparkles className="w-3.5 h-3.5" />}
+                      <span className="text-[8.5px] font-black uppercase tracking-tighter leading-none">{tab}</span>
+                      {activeTab === tab && (
+                        <div className="absolute bottom-[6px] left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-studio-red rotate-45" />
+                      )}
+                    </button>
+                  ))}
+                  
+                  <div className="mt-0.5" />
+
+                  {/* Suggestion Button */}
+                  <button
+                    onClick={() => setActiveTab('SUGGESTIONS')}
+                    className={cn(
+                      "w-full aspect-square flex flex-col items-center justify-center gap-1 transition-all relative group active:scale-95",
+                      activeTab === 'SUGGESTIONS' ? "text-studio-red" : "text-studio-muted opacity-70 hover:opacity-100"
+                    )}
+                  >
+                    <Lightbulb className={cn("w-3.5 h-3.5 transition-transform", activeTab === 'SUGGESTIONS' ? "scale-110" : "group-hover:scale-110")} />
+                    <span className="text-[8.5px] font-black uppercase tracking-tighter leading-none">Suggestion</span>
+                    {activeTab === 'SUGGESTIONS' && (
+                      <div className="absolute bottom-[6px] left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-studio-red rotate-45" />
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
 
-            {/* Results Area */}
-            <div className="h-[250px] overflow-y-auto p-6 bg-white/30 backdrop-blur-[1px]">
-              {!result ? (
-                <div className="h-full flex flex-col items-center justify-center text-center gap-4 text-studio-muted">
-                  <div className="w-10 h-10 rounded-full border border-studio-border flex items-center justify-center text-[12px] opacity-40">!</div>
-                  <p className="text-[10px] font-bold tracking-[0.2em] leading-relaxed uppercase opacity-40">
-                    Select Image<br/>Then Press<br/><span className="text-studio-red">Analyse</span>
-                  </p>
-                </div>
-              ) : (
-                <div className="prose prose-sm prose-gray max-w-none 
-                  prose-h3:text-studio-red prose-h3:uppercase prose-h3:tracking-widest prose-h3:text-[11px] prose-h3:font-bold
-                  prose-p:text-[10px] prose-p:leading-relaxed prose-p:text-studio-text
-                  prose-li:text-[10px] prose-li:text-studio-text
-                  prose-strong:text-studio-red prose-strong:font-bold
-                  prose-table:text-[9px] prose-table:border prose-table:border-studio-border
-                ">
-                   <ReactMarkdown>{result}</ReactMarkdown>
-                </div>
+            {/* Bottom Details (Now expanded) */}
+            <div className="flex-1 flex flex-col bg-white overflow-hidden relative">
+              {result && (
+                <button 
+                  onClick={() => setResult(null)}
+                  className="absolute top-4 right-4 z-20 p-1.5 bg-white border border-studio-border rounded-md hover:bg-neutral-50 transition-colors shadow-sm group"
+                  title="Clear Analysis"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-studio-muted group-hover:text-studio-red" />
+                </button>
               )}
+              <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                {(!result && activeTab !== 'SUGGESTIONS') || (activeTab === 'SUGGESTIONS' && suggestions.length === 0) ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center gap-3 opacity-30 grayscale">
+                    <div className="w-10 h-10 rounded-full border border-studio-border flex items-center justify-center text-[8px]">!</div>
+                    <p className="text-[5px] font-bold tracking-[0.3em] uppercase">
+                      {activeTab === 'SUGGESTIONS' ? 'No consultant history' : 'Analysis Pending Configuration'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="prose prose-sm prose-gray max-w-none 
+                    prose-h3:text-studio-red prose-h3:uppercase prose-h3:tracking-[0.2em] prose-h3:text-[7px] prose-h3:font-black prose-h3:mb-2 prose-h3:mt-0
+                    prose-p:text-[7.5px] prose-p:leading-relaxed prose-p:text-studio-text prose-p:mb-3
+                    prose-li:text-[7.5px] prose-li:text-studio-text
+                    prose-strong:text-studio-red prose-strong:font-bold
+                    prose-table:text-[6.5px] prose-table:border prose-table:border-studio-border
+                  ">
+                     <ReactMarkdown>{getTabContent()}</ReactMarkdown>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </section>
 
         {/* Column 03: Render */}
-        <section className="w-[340px] flex flex-col bg-white/50 backdrop-blur-sm">
-          <div className="p-4 border-b border-studio-border flex items-center justify-between">
+        <section id="render-output-section" className="flex-1 flex flex-col bg-white overflow-hidden border-l border-studio-border">
+          <div className="p-4 border-b border-studio-border flex items-center justify-between bg-white z-10">
             <div className="flex items-center gap-2">
-              <span className="w-5 h-5 flex items-center justify-center border border-studio-red text-[8px] font-bold text-studio-red leading-none">03</span>
-              <h2 className="text-[10px] font-bold tracking-[0.2em] uppercase">Render output</h2>
+              <span className="w-11 h-11 flex items-center justify-center border-2 border-studio-red text-[12px] font-black text-studio-red leading-none rounded-xl">03</span>
+              <h2 className="text-[10px] font-bold tracking-[0.2em] uppercase">Render output & Configuration</h2>
             </div>
-            <div className="px-2 py-0.5 border border-studio-border text-[8px] font-mono text-studio-muted">Imagen 3</div>
+            <div className="flex items-center gap-2">
+              <span className="text-[8px] font-mono text-studio-muted border border-studio-border px-2 py-0.5">V-RAY_GS_3.0</span>
+            </div>
           </div>
 
-          <div className="p-5 flex-1 flex flex-col overflow-hidden">
-            <div className="space-y-4 mb-6">
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-[9px] font-bold text-studio-muted uppercase tracking-widest whitespace-nowrap">Model</span>
-                <select className="flex-1 px-3 py-1.5 border border-studio-border text-[10px] outline-none">
-                  <option>Standard Model (Free)</option>
-                  <option>Imagen 3 (Generate)</option>
-                  <option>Imagen 3 (Refine)</option>
-                </select>
-                <span className="text-[9px] font-bold text-studio-muted uppercase tracking-widest whitespace-nowrap">Ratio</span>
-                <select className="px-3 py-1.5 border border-studio-border text-[10px] outline-none">
-                  <option>16:9</option>
-                  <option>4:3</option>
-                  <option>1:1</option>
-                </select>
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Top Workspace (Orange Box area in mockup) */}
+            <div className="bg-white border-b border-studio-border p-4 flex gap-4 h-[240px]">
+              {/* Part A: Basic Controls */}
+              <div className="w-[180px] flex flex-col gap-4">
+                <div className="space-y-1">
+                  <span className="text-[8px] font-black text-studio-muted uppercase tracking-widest">Render Engine</span>
+                  <select 
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    className="w-full px-2 py-1.5 border border-studio-border text-[9px] font-bold focus:border-studio-red outline-none rounded-lg"
+                  >
+                    <option>Standard (Free)</option>
+                    <option>Imagen 3 - UHD</option>
+                    <option>Imagen 3 - Stylized</option>
+                  </select>
+                </div>
+                
+                <div className="space-y-1">
+                  <span className="text-[8px] font-black text-studio-muted uppercase tracking-widest block">Aspect Ratio</span>
+                  <div className="flex gap-1 justify-start">
+                    {['16:9', '4:3', '1:1'].map(r => (
+                      <button 
+                        key={r} 
+                        onClick={() => setSelectedAspectRatio(r)}
+                        className={cn(
+                          "px-2 py-1 border text-[8px] font-mono transition-all rounded-lg",
+                          selectedAspectRatio === r 
+                            ? "bg-studio-red border-studio-red text-white" 
+                            : "border-studio-border hover:bg-studio-red hover:text-white hover:border-studio-red"
+                        )}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Variants Selector (Blue box from mockup) */}
+                <div className="space-y-1.5 pt-2">
+                  <span className="text-[8px] font-black text-studio-muted uppercase tracking-widest block">Output Variants</span>
+                  <div className="flex gap-1">
+                    {[1, 2, 3].map(count => (
+                      <button 
+                        key={count}
+                        onClick={() => setVariantsCount(count)}
+                        className={cn(
+                          "flex-1 py-1.5 border text-[9px] font-bold transition-all active:scale-95 rounded-lg",
+                          variantsCount === count 
+                            ? "bg-studio-red border-studio-red text-white shadow-sm" 
+                            : "bg-white border-studio-border text-studio-muted hover:bg-studio-bg"
+                        )}
+                      >
+                        {count}X
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[6px] font-medium text-studio-muted leading-tight">Max 3 variants per render request</p>
+                </div>
               </div>
 
-              <div className="flex items-center gap-4">
-                <span className="text-[9px] font-bold text-studio-muted uppercase tracking-widest">Add</span>
-                <input 
-                  type="text" 
-                  placeholder="E.g.: golden hour, rainy, minimalist..." 
-                  className="flex-1 px-3 py-1.5 border border-studio-border text-[10px] outline-none focus:border-studio-red/50"
+              {/* Part B: Center Text Area (Orange Box main area) */}
+              <div className="flex-1 flex flex-col gap-2">
+                <div className="flex items-center gap-2 py-1 px-3 bg-studio-red/5 border-l-2 border-studio-red">
+                  <Sparkles className="w-3 h-3 text-studio-red" />
+                  <span className="text-[9px] font-black text-studio-red uppercase tracking-widest">Design Description</span>
+                </div>
+                <textarea 
+                  className="flex-1 w-full bg-studio-bg/50 border border-studio-border p-3 text-[10px] font-medium leading-relaxed resize-none outline-none focus:bg-white focus:border-studio-red/30 transition-all shadow-inner rounded-xl"
+                  placeholder="Describe the final look. E.g.: Apply natural wood textures, replace chairs with Highlands brand styles, add warm interior lighting..."
+                  value={renderPrompt}
+                  onChange={(e) => setRenderPrompt(e.target.value)}
                 />
+                <div className="text-right text-[7px] font-mono text-studio-muted">{renderPrompt.length} / 500</div>
               </div>
 
-              <button className="w-full py-3 bg-[#D4C4C4] text-white text-[11px] font-bold tracking-[0.3em] uppercase hover:bg-studio-red transition-all flex items-center justify-center gap-2">
-                <Palette className="w-4 h-4" />
-                Render
-              </button>
+              {/* Part C: Red Box area (Reference Assets for Render) */}
+              <div className="w-[260px] border-2 border-dashed border-studio-red bg-studio-red/[0.02] p-3 flex flex-col rounded-xl">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[8px] font-black text-studio-red uppercase tracking-widest">FURNITURE / MATERIAL REF</span>
+                  <Plus className="w-3 h-3 text-studio-red cursor-pointer hover:rotate-90 transition-transform" onClick={() => refFileInputRef.current?.click()} />
+                </div>
+                
+                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                  {refAssets.length > 0 ? (
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {refAssets.map((ast, i) => (
+                        <div key={i} className="aspect-square bg-white border border-studio-border relative group rounded-lg overflow-hidden">
+                          <img src={ast} className="w-full h-full object-cover" />
+                          <button 
+                            onClick={() => setRefAssets(prev => prev.filter((_, idx) => idx !== i))}
+                            className="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <Trash2 className="w-3 h-3 text-white" />
+                          </button>
+                        </div>
+                      ))}
+                      <div className="aspect-square border border-dashed border-studio-border flex items-center justify-center cursor-pointer hover:bg-studio-red/5" onClick={() => refFileInputRef.current?.click()}>
+                        <Plus className="w-4 h-4 text-studio-border group-hover:text-studio-red" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center border border-dashed border-studio-border bg-white/50 opacity-40 text-center gap-1.5 p-2">
+                      <div className="w-8 h-8 rounded-full border border-studio-red flex items-center justify-center">
+                        <Upload className="w-4 h-4 text-studio-red" />
+                      </div>
+                      <p className="text-[7px] font-bold uppercase leading-tight">
+                        Import Detail Refs<br/>(Furniture, Textures)
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
-            <div className="p-4 bg-orange-50 border border-orange-100 mb-6 flex flex-col gap-2">
-              <p className="text-[9px] leading-relaxed font-medium">
-                <strong>Imagen 3</strong> requires an API key with Imagen access enabled in <strong>Google AI Studio</strong>. If you see 403 errors, please check your permission settings.
-              </p>
+            {/* Render Trigger Row (Reorganized) */}
+            <div className="px-4 py-2 border-b border-studio-border bg-[#FBFBFB] flex items-center">
+              {/* Quick Global Lighting Controls */}
+              <div className="w-[180px] shrink-0 space-y-1 pr-4 border-r border-studio-border">
+                <span className="text-[12px] font-black text-studio-red uppercase tracking-widest block text-center -mt-3.5 mb-1.5 drop-shadow-[0_0_3px_rgba(227,24,55,0.4)]">Quick Render Scene</span>
+                <div className="flex gap-1.5 w-full mt-1">
+                  <button 
+                    onClick={handleRender}
+                    disabled={rendering || !image}
+                    className="flex-1 py-1 border border-studio-border text-[9px] font-black uppercase tracking-widest hover:bg-studio-red hover:text-white hover:border-studio-red transition-all shadow-sm active:scale-95 disabled:opacity-30 rounded-lg hover:shadow-[0_0_12px_rgba(227,24,55,0.6)] hover:brightness-110"
+                  >
+                    DAY
+                  </button>
+                  <button 
+                    onClick={handleRender}
+                    disabled={rendering || !image}
+                    className="flex-1 py-1 border border-studio-border text-[9px] font-black uppercase tracking-widest hover:bg-studio-text hover:text-white hover:border-studio-text transition-all shadow-sm active:scale-95 disabled:opacity-30 rounded-lg hover:shadow-[0_0_12px_rgba(31,31,31,0.4)] hover:brightness-125"
+                  >
+                    NIGHT
+                  </button>
+                </div>
+              </div>
+
+              {/* Main Execute Button (Centered) */}
+              <div className="flex-1 flex justify-center">
+                <button 
+                  onClick={handleRender}
+                  disabled={rendering || !image}
+                  className={cn(
+                    "px-5 py-1 text-white text-[11px] font-black tracking-[0.5em] uppercase transition-all flex items-center gap-4 shadow-xl active:scale-95 group border-2 border-transparent rounded-2xl",
+                    image && !rendering ? "bg-studio-red hover:saturate-150 border-white/20" : "bg-neutral-300 grayscale opacity-40 cursor-not-allowed"
+                  )}
+                >
+                  {rendering ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Coffee className="w-14 h-14 group-hover:rotate-12 transition-transform" />
+                  )}
+                  {rendering ? 'CONSTRUCTING...' : selectionRect ? 'RENDER REGION' : 'Render Image'}
+                </button>
+              </div>
+
+              {/* Region Select Button (Matching your blue box) */}
+              <div className="w-[180px] flex justify-end pl-4">
+                <button 
+                  onClick={() => {
+                    setIsSelectingRegion(!isSelectingRegion);
+                    if (!isSelectingRegion) setSelectionRect(null);
+                  }}
+                  className={cn(
+                    "h-12 w-full border-2 flex flex-col items-center justify-center transition-all active:scale-95 rounded-xl group",
+                    isSelectingRegion 
+                      ? "bg-studio-red border-studio-red text-white shadow-[0_0_15px_rgba(227,24,55,0.4)]" 
+                      : selectionRect 
+                        ? "border-studio-red text-studio-red bg-studio-red/5"
+                        : "border-studio-red/30 text-studio-red/50 hover:border-studio-red/60"
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-current rounded-sm flex items-center justify-center">
+                      <div className="w-1 h-1 bg-current rounded-full" />
+                    </div>
+                    <span className="text-[9px] font-black tracking-[0.2em] uppercase">Region Select</span>
+                  </div>
+                  {selectionRect && (
+                     <span className="text-[7px] font-bold opacity-70 mt-0.5 uppercase">
+                       {isSelectingRegion ? "Drawing Area..." : "Area Locked"}
+                     </span>
+                  )}
+                </button>
+              </div>
             </div>
 
-            <div className="flex-1 border border-dashed border-studio-border flex flex-col items-center justify-center text-center gap-4 p-8">
-               <ImageIcon className="w-10 h-10 opacity-20" />
-               <p className="text-[10px] font-bold tracking-[0.2em] leading-relaxed uppercase opacity-40">
-                Analyse image first<br/>then press <span className="text-studio-red">Render</span><br/>to generate final image<br/>using Imagen 3
-               </p>
-            </div>
+            {/* Bottom Output Area (Blue Box in mockup) */}
+              <div className="flex-1 bg-studio-red/[0.03] p-4 flex overflow-hidden">
+                <div className="flex-1 bg-[#924141] relative overflow-hidden flex group border border-white/10 shadow-2xl rounded-2xl">
+                {/* Main Preview (Left) - Increased padding to ~10% */}
+                <div className="flex-1 relative flex items-center justify-center p-[8%] overflow-hidden">
+                  {/* Background texture/grid */}
+                  <div className="absolute inset-0 opacity-10 pointer-events-none" 
+                    style={{ backgroundImage: 'radial-gradient(circle, #ffffff 1px, transparent 1px)', backgroundSize: '30px 30px' }} 
+                  />
+                  
+                  {renderOutputs.length > 0 ? (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="relative w-full h-full flex flex-col gap-4 max-w-[1200px] mx-auto"
+                    >
+                      <div className="relative flex-1 bg-white shadow-[0_0_100px_rgba(0,0,0,0.5)] overflow-hidden border border-white/20 rounded-xl">
+                        <AnimatePresence mode="wait">
+                          <motion.img 
+                            key={activeVariantIndex}
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            src={renderOutputs[activeVariantIndex]} 
+                            alt={`Render Variant ${activeVariantIndex + 1}`} 
+                            className="w-full h-full object-contain" 
+                          />
+                        </AnimatePresence>
+                        
+                        {/* Status Overlays */}
+                        <div className="absolute top-4 left-4 flex flex-col gap-2">
+                          <div className="bg-studio-red text-white py-1.5 px-4 text-[10px] font-black tracking-widest uppercase shadow-xl flex items-center gap-2">
+                            {renderOutputs[activeVariantIndex] === image ? 'V-REF_ENHANCED' : 'FINAL_AI_RENDER'}
+                            <span className="opacity-50 text-[8px]">VAR_{activeVariantIndex + 1}</span>
+                          </div>
+                          <div className="bg-studio-red/80 text-white/70 py-1 px-3 text-[8px] font-mono backdrop-blur-md border border-white/10 italic">
+                            VISION_ID: {Math.random().toString(36).substr(2, 9).toUpperCase()}
+                          </div>
+                        </div>
 
-            <div className="mt-6 flex gap-2">
-              <button className="flex-1 py-2 border border-studio-border text-[9px] font-bold uppercase tracking-widest hover:bg-studio-bg transition-colors flex items-center justify-center gap-2">
-                <Download className="w-3 h-3" />
-                Save
-              </button>
-              <button className="flex-1 py-2 border border-studio-border text-[9px] font-bold uppercase tracking-widest hover:bg-studio-bg transition-colors flex items-center justify-center gap-2">
-                <Plus className="w-3 h-3" />
-                Add to Library
-              </button>
-              <button className="px-3 py-2 border border-studio-border text-[9px] font-bold text-studio-muted">
-                ---
-              </button>
+                        {/* Variant Switcher Icons */}
+                        {renderOutputs.length > 1 && (
+                          <div className="absolute bottom-4 left-4 flex gap-1.5">
+                            {renderOutputs.map((_, i) => (
+                              <button 
+                                key={i}
+                                onClick={() => setActiveVariantIndex(i)}
+                                className={cn(
+                                  "w-8 h-8 border-2 transition-all flex items-center justify-center text-[10px] font-black backdrop-blur-md rounded-lg",
+                                  activeVariantIndex === i 
+                                    ? "bg-studio-red border-white text-white scale-110 shadow-lg" 
+                                    : "bg-black/40 border-white/20 text-white/50 hover:bg-black/60"
+                                )}
+                              >
+                                0{i + 1}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="absolute bottom-4 right-4 flex items-center gap-3">
+                           <div className="bg-studio-red/50 backdrop-blur-md border border-white/20 p-2 flex gap-4 rounded-xl">
+                             <div className="text-center">
+                               <p className="text-[7px] text-white/40 uppercase font-bold">Samples</p>
+                               <p className="text-[9px] text-white font-mono">1024</p>
+                             </div>
+                             <div className="w-px h-6 bg-white/20" />
+                             <div className="text-center">
+                               <p className="text-[7px] text-white/40 uppercase font-bold">Time</p>
+                               <p className="text-[9px] text-white font-mono">{(1.2 * (activeVariantIndex + 1)).toFixed(1)}s</p>
+                             </div>
+                           </div>
+                        </div>
+
+                        {/* Interactive overlay on hover */}
+                        <div className="absolute inset-0 bg-studio-red/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none mix-blend-overlay" />
+                      </div>
+
+                      <div className="flex items-center justify-end px-4 py-2 border-t border-white/10">
+                        <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-2 bg-studio-red/20 px-3 py-1 border border-studio-red/40">
+                             <div className="w-1.5 h-1.5 bg-studio-red rounded-full animate-pulse shadow-[0_0_8px_#E31837]" />
+                             <span className="text-[9px] font-black text-studio-red uppercase tracking-widest">Live Output Sync</span>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-6 text-white/25 group-hover:text-white/35 transition-colors">
+                      <div className="relative">
+                      {/* Steam particles */}
+                      {(rendering || renderOutputs.length === 0) && (
+                        <div className="absolute -top-8 left-1/2 -translate-x-1/2 flex gap-1 justify-center w-full">
+                          {[1, 2, 3].map((i) => (
+                            <motion.div
+                              key={i}
+                              initial={{ y: 0, opacity: 0, scale: 0.5 }}
+                              animate={{ 
+                                y: -20, 
+                                opacity: [0, 0.5, 0],
+                                scale: [0.5, 1.2, 0.8],
+                                x: Math.sin(i) * 5
+                              }}
+                              transition={{ 
+                                duration: 1.5, 
+                                repeat: Infinity, 
+                                delay: i * 0.4,
+                                ease: "easeOut"
+                              }}
+                              className="w-1.5 h-4 bg-white/20 rounded-full blur-[2px]"
+                            />
+                          ))}
+                        </div>
+                      )}
+                      
+                      <Coffee className="w-14 h-14" />
+                      {rendering && (
+                        <motion.div 
+                          initial={{ height: 0 }}
+                          animate={{ height: '100%' }}
+                          transition={{ duration: 2, repeat: Infinity }}
+                          className="absolute bottom-0 left-0 w-full overflow-hidden"
+                        >
+                          <Coffee className="w-14 h-14 text-studio-red" />
+                        </motion.div>
+                      )}
+                    </div>
+                      <div className="text-center space-y-2">
+                        <p className="text-[10px] font-black tracking-[0.4em] uppercase">
+                           {rendering ? 'Synthesizing Architecture' : 'this place still need your creatives'}
+                        </p>
+                        <p className="text-[8px] font-bold tracking-widest opacity-60">
+                           {rendering ? 'Calculating ray-trace trajectories and material reflectance' : 'your direction my render'}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Actions Sidebar (Right - Vertical Blue Outline area from mockup) */}
+                <div className="w-16 border-l border-white/5 bg-studio-red/20 backdrop-blur-md flex flex-col items-center py-8 gap-4 z-20">
+                  <button 
+                    onClick={handleSave} 
+                    disabled={renderOutputs.length === 0}
+                    className={cn(
+                      "w-11 h-11 flex flex-col items-center justify-center rounded-xl transition-all shadow-xl active:scale-90 group relative",
+                      renderOutputs.length > 0 ? "bg-white/10 text-white hover:bg-studio-red" : "bg-white/5 text-white/20 cursor-not-allowed"
+                    )}
+                  >
+                    <Download className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" />
+                    <span className="text-[6px] font-black uppercase tracking-tighter mt-1">SAVE</span>
+                  </button>
+                  
+                  <button 
+                    onClick={handleAddToLibrary} 
+                    disabled={renderOutputs.length === 0}
+                    className={cn(
+                      "w-11 h-11 flex flex-col items-center justify-center rounded-xl transition-all shadow-xl active:scale-90 group relative",
+                      renderOutputs.length > 0 ? "bg-white/10 text-white hover:bg-studio-red" : "bg-white/5 text-white/20 cursor-not-allowed"
+                    )}
+                  >
+                    <Plus className="w-5 h-5 group-hover:rotate-90 transition-transform" />
+                    <span className="text-[6px] font-black uppercase tracking-tighter mt-1">LIBRARY</span>
+                  </button>
+
+                  <div className="flex-1 w-px bg-gradient-to-b from-white/10 to-transparent my-4" />
+                  
+                  <div className="w-8 aspect-square border border-dashed border-white/10 flex items-center justify-center text-[7px] font-mono text-white/20 uppercase">
+                    8K
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
+          </>
+        ) : activeApp === 'BIM_BREAKDOWN' ? (
+          <div className="flex-1 flex flex-col bg-studio-bg overflow-hidden relative">
+            <div className="absolute inset-0 opacity-5 pointer-events-none" 
+              style={{ backgroundImage: 'radial-gradient(circle, #333 1px, transparent 1px)', backgroundSize: '24px 24px' }} 
+            />
+            
+            {/* BIM Breakdown Header */}
+            <div className="p-8 pb-4 flex items-center justify-between z-10">
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 bg-studio-red flex items-center justify-center rounded-2xl shadow-xl shadow-studio-red/20">
+                  <Layers className="w-8 h-8 text-white" />
+                </div>
+                <div>
+                  <h1 className="text-2xl font-black text-studio-black tracking-widest uppercase">BIM Breakdown Dashboard</h1>
+                  <p className="text-[10px] font-bold text-studio-muted tracking-[0.3em] uppercase mt-1 italic">Quantity Takeoff & Construction Data Integration</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <button className="px-4 py-2 bg-white border border-studio-border text-[9px] font-black uppercase tracking-widest rounded-lg shadow-sm hover:bg-studio-bg transition-all active:scale-95">Export IFC</button>
+                <button className="px-4 py-2 bg-studio-black text-white text-[9px] font-black uppercase tracking-widest rounded-lg shadow-xl shadow-black/10 active:scale-95 transition-all">Submit Review</button>
+              </div>
+            </div>
+
+            <div className="flex-1 p-8 pt-4 flex gap-8 overflow-hidden">
+              {/* Left Column: Data Structure */}
+              <div className="w-[350px] flex flex-col gap-6">
+                <div className="flex-1 bg-white border border-studio-border shadow-xl rounded-3xl p-6 flex flex-col overflow-hidden">
+                  <div className="flex items-center justify-between mb-6">
+                    <span className="text-[10px] font-black text-studio-muted uppercase tracking-widest">Model Hierarchy</span>
+                    <Plus className="w-4 h-4 text-studio-red cursor-pointer" />
+                  </div>
+                  
+                  <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
+                    {[
+                      { id: 'STR-01', name: 'Foundation & Footing', count: 12, status: 'Completed' },
+                      { id: 'ARC-02', name: 'Wall Interior - Type A', count: 45, status: 'In Review' },
+                      { id: 'ARC-03', name: 'Ceiling Finishes', count: 8, status: 'Draft' },
+                      { id: 'MEP-01', name: 'HVAC Distribution', count: 15, status: 'Pending' },
+                      { id: 'FF-01', name: 'Furniture & Fixtures', count: 22, status: 'Draft' }
+                    ].map(item => (
+                      <div key={item.id} className="p-4 border border-studio-border bg-studio-bg/30 rounded-2xl group hover:border-studio-red/30 transition-all cursor-pointer">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[8px] font-mono text-studio-red">{item.id}</span>
+                          <span className={cn(
+                            "text-[7px] font-black uppercase px-2 py-0.5 rounded-full",
+                            item.status === 'Completed' ? "bg-green-100 text-green-700" :
+                            item.status === 'In Review' ? "bg-blue-100 text-blue-700" :
+                            "bg-amber-100 text-amber-700"
+                          )}>{item.status}</span>
+                        </div>
+                        <p className="text-[11px] font-black text-studio-black uppercase">{item.name}</p>
+                        <p className="text-[8px] text-studio-muted mt-1">{item.count} elements extracted from vision</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Detailed Takeoff & Material Estimates */}
+              <div className="flex-1 flex flex-col gap-6 overflow-hidden">
+                <div className="h-1/2 bg-white border border-studio-border shadow-xl rounded-3xl p-8 overflow-hidden flex flex-col">
+                  <div className="flex items-center justify-between mb-8">
+                    <div className="flex items-center gap-3">
+                      <div className="w-1.5 h-6 bg-studio-red rounded-full" />
+                      <h3 className="text-sm font-black text-studio-black uppercase tracking-widest">Quantity Takeoff Summary</h3>
+                    </div>
+                    <div className="text-[8px] font-mono text-studio-muted">LAST SYNC: 08:36:20</div>
+                  </div>
+                  
+                  <div className="flex-1 overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="border-b border-studio-border">
+                          <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest">Material Type</th>
+                          <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest">Estimated Qty</th>
+                          <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest">Confidence</th>
+                          <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest">Unit Price</th>
+                          <th className="pb-4 text-[9px] font-black text-studio-muted uppercase tracking-widest text-right">Subtotal</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-studio-border/50">
+                        {[
+                          { name: 'Warm Oak Panel', qty: '124 m²', conf: '92%', price: '$45.00', total: '$5,580.00' },
+                          { name: 'Matte Black Steel (Ø12)', qty: '850 kg', conf: '88%', price: '$2.20', total: '$1,870.00' },
+                          { name: 'Polished Ceramic - Highlands Red', qty: '45 m²', conf: '95%', price: '$38.50', total: '$1,732.50' },
+                          { name: 'Industrial Concrete Floor', qty: '210 m²', conf: '98%', price: '$12.00', total: '$2,520.00' }
+                        ].map((row, i) => (
+                          <tr key={i} className="hover:bg-studio-bg/50 transition-colors">
+                            <td className="py-4 text-[10px] font-bold text-studio-black">{row.name}</td>
+                            <td className="py-4 text-[9px] font-mono text-studio-muted">{row.qty}</td>
+                            <td className="py-4">
+                              <div className="flex items-center gap-2">
+                                <div className="w-12 h-1 bg-studio-bg rounded-full overflow-hidden">
+                                  <div className="h-full bg-green-500" style={{ width: row.conf }} />
+                                </div>
+                                <span className="text-[8px] font-bold text-green-600">{row.conf}</span>
+                              </div>
+                            </td>
+                            <td className="py-4 text-[9px] font-mono text-studio-muted">{row.price}</td>
+                            <td className="py-4 text-[9px] font-black text-studio-black text-right">{row.total}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="flex-1 grid grid-cols-3 gap-6">
+                  <div className="bg-white border border-studio-border shadow-xl rounded-3xl p-6 flex flex-col justify-between">
+                    <p className="text-[9px] font-black text-studio-muted uppercase tracking-widest">Total Estimated Budget</p>
+                    <div className="mt-4">
+                      <span className="text-3xl font-black text-studio-red">$15,420</span>
+                      <span className="text-[10px] text-studio-muted ml-2">USD</span>
+                    </div>
+                    <div className="text-[8px] font-bold text-green-600 flex items-center gap-1 mt-2">
+                      <Plus className="w-2 h-2" /> 2.5% vs previous estimate
+                    </div>
+                  </div>
+                  <div className="bg-studio-black shadow-xl rounded-3xl p-6 flex flex-col justify-between">
+                    <p className="text-[9px] font-black text-white/50 uppercase tracking-widest">Sync Health</p>
+                    <div className="mt-4 flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-full border-4 border-studio-red border-t-white animate-spin" />
+                      <span className="text-xl font-black text-white uppercase italic">94.2%</span>
+                    </div>
+                    <div className="text-[8px] font-bold text-white/40 uppercase tracking-widest mt-2">RVT-Studio Integration Active</div>
+                  </div>
+                  <div className="bg-white border border-studio-border shadow-xl rounded-3xl p-6 flex flex-col justify-between group cursor-pointer hover:border-studio-red transition-all">
+                    <p className="text-[9px] font-black text-studio-muted uppercase tracking-widest">Architectural Verification</p>
+                    <div className="mt-4 flex -space-x-2">
+                       {[1,2,3,4].map(i => (
+                         <div key={i} className="w-8 h-8 rounded-full border-2 border-white bg-studio-bg flex items-center justify-center overflow-hidden">
+                           <img src={`https://i.pravatar.cc/150?u=${i}`} alt="User" />
+                         </div>
+                       ))}
+                       <div className="w-8 h-8 rounded-full border-2 border-white bg-studio-red text-white flex items-center justify-center text-[8px] font-black">+3</div>
+                    </div>
+                    <div className="text-[8px] font-bold text-studio-red uppercase tracking-widest mt-2 group-hover:underline">Requests Pending Approval</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center bg-studio-bg gap-6 text-center">
+            <div className="w-24 h-24 bg-studio-red text-white flex items-center justify-center rounded-[2.5rem] shadow-2xl shadow-studio-red/30 animate-pulse">
+              <Sparkles className="w-12 h-12" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-black text-studio-black uppercase tracking-widest">Library & Assets</h2>
+              <p className="text-sm font-bold text-studio-muted tracking-wide mt-2 italic">Syncing with Highlands Cloud Storage...</p>
+            </div>
+          </div>
+        )}
       </main>
 
       <input 
@@ -340,6 +1381,23 @@ export default function App() {
         onChange={handleFileChange} 
         className="hidden" 
         accept="image/*" 
+      />
+
+      <input 
+        type="file" 
+        ref={refFileInputRef} 
+        onChange={handleRefFileChange} 
+        className="hidden" 
+        accept="image/*" 
+      />
+
+      <input 
+        type="file" 
+        ref={docInputRef} 
+        onChange={handleDocChange} 
+        className="hidden" 
+        multiple
+        accept=".pdf,.doc,.docx,.txt" 
       />
 
       {/* Decorative corners/elements */}
