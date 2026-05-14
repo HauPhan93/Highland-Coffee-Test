@@ -1,4 +1,4 @@
-import { useState, useRef, ChangeEvent } from 'react';
+import { useState, useRef, ChangeEvent, useEffect } from 'react';
 import { Upload, Image as ImageIcon, Sparkles, Building2, Layers, SunMedium, Palette, ChevronLeft, Download, Plus, Trash2, Send, Folder, FileText, MessageSquare, Coffee, Lightbulb, Timer, ChevronDown, LayoutGrid } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -19,6 +19,9 @@ export default function App() {
   const [image, setImage] = useState<string | null>(null);
   const [imageUrl, setImageUrl] = useState('');
   const [docs, setDocs] = useState<File[]>([]);
+  const [contextAnalysis, setContextAnalysis] = useState<string | null>(null);
+  const [contextTags, setContextTags] = useState<string[]>([]);
+  const [isAnalyzingContext, setIsAnalyzingContext] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +34,7 @@ export default function App() {
   const [activeApp, setActiveApp] = useState<'VISUAL_DESIGN' | 'BIM_BREAKDOWN' | 'LIBRARY'>('VISUAL_DESIGN');
   const [ifcFile, setIfcFile] = useState<File | null>(null);
   const [isProcessingIfc, setIsProcessingIfc] = useState(false);
+  const [ifcProgress, setIfcProgress] = useState(0);
   const [bimAttachments, setBimAttachments] = useState<{name: string, type: string}[]>([]);
   const userEmail = "hau1412159@gmail.com";
   
@@ -45,10 +49,19 @@ export default function App() {
     if (file) {
       setIfcFile(file);
       setIsProcessingIfc(true);
-      // Simulate processing time
-      setTimeout(() => {
-        setIsProcessingIfc(false);
-      }, 3000);
+      setIfcProgress(0);
+      
+      let progress = 0;
+      const interval = setInterval(() => {
+        progress += Math.random() * 15;
+        if (progress >= 100) {
+          setIfcProgress(100);
+          clearInterval(interval);
+          setTimeout(() => setIsProcessingIfc(false), 500);
+        } else {
+          setIfcProgress(Math.floor(progress));
+        }
+      }, 200);
     }
   };
 
@@ -68,9 +81,16 @@ export default function App() {
   };
 
   const handleRefFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      processImage(file, 'ref');
+    const files = e.target.files;
+    if (files) {
+      Array.from(files).forEach(file => {
+        if (file.type.startsWith('image/')) {
+          processImage(file, 'ref');
+        } else {
+          // Store as reference document
+          setRefAssets(prev => [...prev, URL.createObjectURL(file)]);
+        }
+      });
     }
   };
 
@@ -143,13 +163,64 @@ export default function App() {
   const handleDocChange = (e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files) {
-      setDocs(prev => [...prev, ...Array.from(files)]);
+      const newDocs = Array.from(files);
+      setDocs(prev => [...prev, ...newDocs]);
     }
   };
 
   const removeDoc = (index: number) => {
     setDocs(prev => prev.filter((_, i) => i !== index));
+    if (docs.length === 1) {
+      setContextAnalysis(null);
+      setContextTags([]);
+    }
   };
+
+  useEffect(() => {
+    if (docs.length === 0 && assets.length === 0) {
+      setContextAnalysis(null);
+      setContextTags([]);
+      return;
+    }
+
+    const runAnalysis = async () => {
+      setIsAnalyzingContext(true);
+      try {
+        const fileToBase64 = (file: File): Promise<string> => {
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = error => reject(error);
+          });
+        };
+
+        const docAssets = await Promise.all(docs.map(async (f) => ({
+          base64: await fileToBase64(f),
+          mimeType: f.type || 'text/plain',
+          name: f.name
+        })));
+        
+        // Use all available assets
+        const imageAssetsResult = assets.map(img => ({
+          base64: img,
+          mimeType: 'image/jpeg' // simplify default
+        }));
+
+        const result = await architectureService.analyzeContextInformation(docAssets, imageAssetsResult);
+        setContextAnalysis(result.analysis);
+        setContextTags(result.tags);
+      } catch (err) {
+        console.error("Context analysis failed", err);
+      } finally {
+        setIsAnalyzingContext(false);
+      }
+    };
+
+    // Debounce to prevent multiple fires when rapidly adding files
+    const timeout = setTimeout(runAnalysis, 1500);
+    return () => clearTimeout(timeout);
+  }, [docs, assets]);
 
   const startAnalysis = async () => {
     if (!image) return;
@@ -284,7 +355,7 @@ export default function App() {
     return Math.round(sum / scores.length);
   };
 
-  const [selectedModel, setSelectedModel] = useState('Standard Model (Free)');
+  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash-image');
   const [selectedAspectRatio, setSelectedAspectRatio] = useState('1:1');
   const [isSelectingRegion, setIsSelectingRegion] = useState(false);
   const [selectionRect, setSelectionRect] = useState<{x: number, y: number, w: number, h: number} | null>(null);
@@ -292,43 +363,131 @@ export default function App() {
   const [renderOutputs, setRenderOutputs] = useState<string[]>([]);
   const [activeVariantIndex, setActiveVariantIndex] = useState(0);
   const [rendering, setRendering] = useState(false);
+  const [activeParams, setActiveParams] = useState({ lighting: 'Day' });
   
-  const handleRender = () => {
+  const handleRender = async (lightingOverride?: 'Day' | 'Night') => {
     if (!image) {
       setError('Please upload an image first.');
       return;
+    }
+
+    const currentLighting = lightingOverride || activeParams.lighting;
+    if (lightingOverride) {
+      setActiveParams(prev => ({ ...prev, lighting: lightingOverride }));
     }
     
     setRendering(true);
     setRenderOutputs([]);
     setActiveVariantIndex(0);
+    setError(null);
     
-    // Simulate rendering process based on variantsCount
-    setTimeout(() => {
-      const highlandVisions = [
-        'https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&q=80&w=1000',
-        'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&q=80&w=1000',
-        'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&q=80&w=1000',
-        'https://images.unsplash.com/photo-1518005020251-5829678ec8c4?auto=format&fit=crop&q=80&w=1000'
-      ];
-
-      const newOutputs: string[] = [];
-      for (let i = 0; i < variantsCount; i++) {
-        if (selectedModel === 'Standard (Free)') {
-           newOutputs.push(image);
-        } else {
-           const randomVision = highlandVisions[(Math.floor(Math.random() * highlandVisions.length) + i) % highlandVisions.length];
-           newOutputs.push(randomVision);
+    try {
+      // Determine prompt: use user prompt if available, otherwise extract from results
+      let finalPrompt = renderPrompt.trim();
+      if (!finalPrompt && result) {
+        const match = result.match(/### IMAGEN 3 RENDER PROMPT\n\n([\s\S]+?)(?=\n\n###|$)/i);
+        if (match) {
+          finalPrompt = match[1].trim();
         }
       }
       
-      setRenderOutputs(newOutputs);
+      if (!finalPrompt) {
+        finalPrompt = "Professional architectural photography, photorealistic, high quality, architecture render.";
+      }
+
+      // Light/Time of day context
+      let lightPrompt = "";
+      if (currentLighting === 'Day') {
+        lightPrompt = "Bright natural daylight, golden hour sunlight, sharp shadows, clear sky.";
+      } else {
+        lightPrompt = "Evening night photography, cinematic artificial lighting, illuminated interiors glowing through glass, long exposure, deep blue night sky.";
+      }
+
+      const variantStyles = [
+        "Ultra-modern architectural style, sharp glass and steel reflections",
+        "Minimalist brutalist approach, raw concrete textures and clean lines",
+        "Contemporary organic architecture, wooden accents and lush landscaping",
+        "Bauhaus inspired industrial design, functional aesthetics and primary color accents"
+      ];
+
+      // Generate variants sequentially
+      for (let i = 0; i < variantsCount; i++) {
+        try {
+          const styleContext = variantStyles[i % variantStyles.length];
+          const variantPrompt = `${finalPrompt} ${lightPrompt} Style: ${styleContext}. High-end architectural render.`;
+          
+          const output = await architectureService.generateRenderImage(
+            variantPrompt,
+            image, 
+            'image/jpeg',
+            selectedModel,
+            selectedAspectRatio
+          );
+          setRenderOutputs(prev => [...prev, output]);
+        } catch (err: any) {
+           console.error(`Variant ${i+1} failed:`, err);
+           // If this is the first variant and it fails, we fall back
+           if (i === 0) throw err;
+        }
+      }
+    } catch (err: any) {
+      console.error("Render error detail:", err);
+      let errorMessage = err.message || String(err);
+      
+      // Try to parse JSON error if it looks like one
+      if (errorMessage.includes('{') && errorMessage.includes('}')) {
+        try {
+          const jsonStart = errorMessage.indexOf('{');
+          const jsonEnd = errorMessage.lastIndexOf('}') + 1;
+          const jsonPart = errorMessage.substring(jsonStart, jsonEnd);
+          const parsed = JSON.parse(jsonPart);
+          if (parsed.error && parsed.error.message) {
+            errorMessage = parsed.error.message;
+          }
+        } catch (e) {
+          // Fallback to original string if parsing fails
+        }
+      }
+      
+      if (errorMessage.includes("403") || errorMessage.toLowerCase().includes("permission")) {
+        setError("Access Denied (403): Your API Key does not have permission to use this model. You may need to enable billing in Google Cloud.");
+      } else if (errorMessage.includes("API key")) {
+        setError("API Key Error: Please ensure you have enabled the required model APIs in Google AI Studio.");
+      } else if (errorMessage.includes("quota") || errorMessage.includes("429")) {
+        setError("AI Quota Exceeded: Please wait a moment before trying again.");
+      } else if (errorMessage.toLowerCase().includes("high demand") || errorMessage.includes("503")) {
+        setError("Server Busy: Google's AI servers are currently experiencing high demand. Please try again in a few moments.");
+      } else if (errorMessage.includes("model not found") || errorMessage.includes("not found")) {
+        setError(`Model error: The selected AI model (${selectedModel}) might not be available yet in this region.`);
+      } else if (errorMessage.includes("safety")) {
+        setError("Safety Filter: The prompt or image triggered safety restrictions. Please try a different design.");
+      } else {
+        setError(`AI Render failed: ${errorMessage.length > 80 ? errorMessage.substring(0, 80) + '...' : errorMessage}`);
+      }
+      
+      // Fallback only if no outputs were generated
+      setRenderOutputs(prev => prev.length === 0 ? [image] : prev);
+    } finally {
       setRendering(false);
-    }, 1500 * variantsCount); // Scale wait time by count
+    }
   };
 
-  const handleSave = async () => {
-    const activeOutput = renderOutputs[activeVariantIndex];
+  const handleDeleteVariant = (index: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRenderOutputs(prev => {
+      const newOutputs = prev.filter((_, i) => i !== index);
+      if (activeVariantIndex >= newOutputs.length && newOutputs.length > 0) {
+        setActiveVariantIndex(newOutputs.length - 1);
+      } else if (newOutputs.length === 0) {
+        setActiveVariantIndex(0);
+      }
+      return newOutputs;
+    });
+  };
+
+  const handleSave = async (index?: number) => {
+    const idx = typeof index === 'number' ? index : activeVariantIndex;
+    const activeOutput = renderOutputs[idx];
     if (!activeOutput) return;
     
     try {
@@ -338,7 +497,7 @@ export default function App() {
       
       const link = document.createElement('a');
       link.href = url;
-      link.download = `highlands-render-v${activeVariantIndex + 1}.jpg`;
+      link.download = `highlands-render-v${idx + 1}.jpg`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -347,7 +506,7 @@ export default function App() {
       const link = document.createElement('a');
       link.href = activeOutput;
       link.target = '_blank';
-      link.download = `highlands-render-v${activeVariantIndex + 1}.jpg`;
+      link.download = `highlands-render-v${idx + 1}.jpg`;
       link.click();
     }
   };
@@ -539,15 +698,26 @@ export default function App() {
 
             {/* List of uploaded documents */}
             {docs.length > 0 && (
-              <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
+              <div className="max-h-32 overflow-y-auto space-y-1 pr-1 custom-scrollbar mb-3">
                 {docs.map((doc, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-1.5 bg-white border border-studio-border group rounded-lg">
+                  <div key={idx} className="flex items-center justify-between p-1.5 bg-white border border-studio-border group rounded-xl hover:border-studio-red/30 transition-all">
                     <div className="flex items-center gap-2 overflow-hidden">
-                      <FileText className="w-2.5 h-2.5 text-studio-red flex-shrink-0" />
-                      <span className="text-[8px] text-studio-text truncate font-medium">{doc.name}</span>
+                      {doc.type.startsWith('image/') ? (
+                        <div className="w-6 h-6 rounded-md overflow-hidden bg-studio-bg flex-shrink-0">
+                           <img src={URL.createObjectURL(doc)} alt="Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        </div>
+                      ) : (
+                        <div className="w-6 h-6 rounded-md bg-studio-red/5 flex items-center justify-center flex-shrink-0">
+                          <FileText className="w-3 h-3 text-studio-red" />
+                        </div>
+                      )}
+                      <div className="flex flex-col overflow-hidden">
+                        <span className="text-[8px] text-studio-black truncate font-black uppercase tracking-tight">{doc.name}</span>
+                        <span className="text-[6px] text-studio-muted uppercase font-bold">{doc.type.split('/')[1] || 'FILE'}</span>
+                      </div>
                     </div>
-                    <button onClick={() => removeDoc(idx)} className="opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Plus className="w-2.5 h-2.5 text-studio-muted hover:text-studio-red rotate-45" />
+                    <button onClick={() => removeDoc(idx)} className="p-1 hover:bg-studio-red/10 rounded-md transition-colors">
+                      <Trash2 className="w-2.5 h-2.5 text-studio-muted hover:text-studio-red" />
                     </button>
                   </div>
                 ))}
@@ -585,7 +755,7 @@ export default function App() {
                       image === ast ? "border-studio-red ring-1 ring-studio-red ring-offset-1 shadow-sm" : "border-studio-border hover:border-studio-muted"
                     )}
                   >
-                    <img src={ast} alt={`Asset ${idx}`} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                    <img src={ast} alt={`Asset ${idx}`} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" referrerPolicy="no-referrer" />
                     <button 
                       onClick={(e) => {
                         e.stopPropagation();
@@ -616,13 +786,13 @@ export default function App() {
                       <circle cx="12" cy="12" r="10" />
                       <motion.line
                         x1="12" y1="12" x2="12" y2="7"
-                        animate={analyzing ? { rotate: 360 } : { rotate: 0 }}
-                        transition={analyzing ? { duration: 2, repeat: Infinity, ease: "linear" } : { duration: 0.5 }}
+                        animate={isAnalyzingContext ? { rotate: 360 } : { rotate: 0 }}
+                        transition={isAnalyzingContext ? { duration: 2, repeat: Infinity, ease: "linear" } : { duration: 0.5 }}
                         style={{ originX: "12px", originY: "12px" }}
                       />
                     </svg>
                   </div>
-                  <span className="text-[9px] font-black uppercase tracking-[0.2em]">AI Context Analysis</span>
+                  <span className="text-[9px] font-black uppercase tracking-[0.2em]">{isAnalyzingContext ? "Analyzing Context..." : "AI Context Analysis"}</span>
                 </div>
                 <div className="px-1.5 py-0.5 border border-studio-red/30 text-[7px] font-mono opacity-50 uppercase">V_ENGINE_4.0</div>
               </div>
@@ -632,21 +802,23 @@ export default function App() {
                   <div className="space-y-3">
                     <div className="p-2.5 border border-studio-red/20 bg-white rounded-xl shadow-sm">
                       <div className="flex items-center justify-between mb-1 text-studio-red">
-                        <p className="text-[8px] font-black uppercase tracking-tighter">Visual Intelligence</p>
-                        <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse shadow-[0_0_8px_#22c55e]" />
+                        <p className="text-[8px] font-black uppercase tracking-tighter">Visual & Document Intelligence</p>
+                        <div className={cn("w-1.5 h-1.5 rounded-full shadow-[0_0_8px_currentColor]", isAnalyzingContext ? "bg-amber-500 animate-pulse text-amber-500" : "bg-green-500 text-green-500")} />
                       </div>
                       <p className="text-[9px] text-studio-muted leading-relaxed font-medium">
-                        Highlands Brand DNA detected: Extracted warm oak textures, industrial matte black accents, and optimized 3000K counter-flow lighting from user references.
+                        {isAnalyzingContext ? "Extracting brand DNA and stylistic concepts from references..." : (contextAnalysis || "No context analysis generated yet. Add more specific documents or references to improve extraction.")}
                       </p>
                     </div>
-                    <div className="p-2.5 border border-studio-border bg-white/50 rounded-xl">
-                      <p className="text-[8px] font-black text-studio-muted mb-1.5 uppercase tracking-tighter">Material Correlation</p>
-                      <div className="flex flex-wrap gap-1">
-                        {['Earthy Tones', 'Ceramic Tiles', 'Ambient Glow', 'Brand Red', 'Industrial'].map(tag => (
-                          <span key={tag} className="px-2 py-0.5 bg-studio-border/30 text-[7px] font-mono font-bold uppercase tracking-tighter text-studio-muted border border-studio-border rounded-md lowercase">{tag}</span>
-                        ))}
+                    {contextTags.length > 0 && (
+                      <div className="p-2.5 border border-studio-border bg-white/50 rounded-xl">
+                        <p className="text-[8px] font-black text-studio-muted mb-1.5 uppercase tracking-tighter">Key Correlations</p>
+                        <div className="flex flex-wrap gap-1">
+                          {contextTags.map(tag => (
+                            <span key={tag} className="px-2 py-0.5 bg-studio-border/30 text-[7px] font-mono font-bold uppercase tracking-tighter text-studio-muted border border-studio-border rounded-md lowercase">{tag}</span>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center opacity-30 text-center py-4">
@@ -654,7 +826,7 @@ export default function App() {
                       <div className="w-2 h-2 bg-studio-red rotate-45" />
                     </div>
                     <p className="text-[10px] font-black uppercase tracking-widest text-studio-red">Awaiting Space...</p>
-                    <p className="text-[8px] mt-1 font-bold italic text-studio-muted">Knowledge graph will propagate once assets are uploaded</p>
+                    <p className="text-[8px] mt-1 font-bold italic text-studio-muted">Knowledge graph will propagate once assets or docs are uploaded</p>
                   </div>
                 )}
               </div>
@@ -694,7 +866,7 @@ export default function App() {
                       animate={{ opacity: 1 }}
                       className="relative w-full h-full flex items-center justify-center select-none"
                     >
-                      <img src={image} alt="Source" className="max-w-full max-h-full object-contain shadow-2xl pointer-events-none" />
+                      <img src={image} alt="Source" className="max-w-full max-h-full object-contain shadow-2xl pointer-events-none" referrerPolicy="no-referrer" />
                       <div className="absolute top-2 left-2 px-2 py-1 bg-black/40 text-[7px] text-white font-mono uppercase tracking-[0.3em] backdrop-blur-sm border border-white/10">Source_Canvas</div>
                       
                       {/* Selection Overlay */}
@@ -894,9 +1066,9 @@ export default function App() {
                     onChange={(e) => setSelectedModel(e.target.value)}
                     className="w-full px-2 py-1.5 border border-studio-border text-[9px] font-bold focus:border-studio-red outline-none rounded-lg"
                   >
-                    <option>Standard (Free)</option>
-                    <option>Imagen 3 - UHD</option>
-                    <option>Imagen 3 - Stylized</option>
+                    <option value="gemini-2.5-flash-image">Gemini Flash Image</option>
+                    <option value="imagen-3.0-generate-002">Imagen 3 (High Quality)</option>
+                    <option value="imagen-3.0-fast-generate-001">Imagen 3 Fast (Performance)</option>
                   </select>
                 </div>
                 
@@ -970,7 +1142,14 @@ export default function App() {
                     <div className="grid grid-cols-4 gap-1.5">
                       {refAssets.map((ast, i) => (
                         <div key={i} className="aspect-square bg-white border border-studio-border relative group rounded-lg overflow-hidden">
-                          <img src={ast} className="w-full h-full object-cover" />
+                          {ast.startsWith('blob:') && !ast.includes('image') ? (
+                            <div className="w-full h-full flex flex-col items-center justify-center p-1 bg-studio-bg">
+                              <FileText className="w-4 h-4 text-studio-red" />
+                              <span className="text-[5px] font-black uppercase text-studio-black mt-1">DOC</span>
+                            </div>
+                          ) : (
+                            <img src={ast} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          )}
                           <button 
                             onClick={() => setRefAssets(prev => prev.filter((_, idx) => idx !== i))}
                             className="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
@@ -1004,16 +1183,26 @@ export default function App() {
                 <span className="text-[12px] font-black text-studio-red uppercase tracking-widest block text-center -mt-3.5 mb-1.5 drop-shadow-[0_0_3px_rgba(227,24,55,0.4)]">Quick Render Scene</span>
                 <div className="flex gap-1.5 w-full mt-1">
                   <button 
-                    onClick={handleRender}
+                    onClick={() => handleRender('Day')}
                     disabled={rendering || !image}
-                    className="flex-1 py-1 border border-studio-border text-[9px] font-black uppercase tracking-widest hover:bg-studio-red hover:text-white hover:border-studio-red transition-all shadow-sm active:scale-95 disabled:opacity-30 rounded-lg hover:shadow-[0_0_12px_rgba(227,24,55,0.6)] hover:brightness-110"
+                    className={cn(
+                      "flex-1 py-1 border text-[9px] font-black uppercase tracking-widest transition-all shadow-sm active:scale-95 disabled:opacity-30 rounded-lg",
+                      activeParams.lighting === 'Day' 
+                        ? "bg-studio-red border-studio-red text-white shadow-[0_0_12px_rgba(227,24,55,0.6)]" 
+                        : "border-studio-border hover:bg-studio-red/10 text-studio-muted"
+                    )}
                   >
                     DAY
                   </button>
                   <button 
-                    onClick={handleRender}
+                    onClick={() => handleRender('Night')}
                     disabled={rendering || !image}
-                    className="flex-1 py-1 border border-studio-border text-[9px] font-black uppercase tracking-widest hover:bg-studio-text hover:text-white hover:border-studio-text transition-all shadow-sm active:scale-95 disabled:opacity-30 rounded-lg hover:shadow-[0_0_12px_rgba(31,31,31,0.4)] hover:brightness-125"
+                    className={cn(
+                      "flex-1 py-1 border text-[9px] font-black uppercase tracking-widest transition-all shadow-sm active:scale-95 disabled:opacity-30 rounded-lg",
+                      activeParams.lighting === 'Night' 
+                        ? "bg-studio-text border-studio-text text-white shadow-[0_0_12px_rgba(31,31,31,0.4)]" 
+                        : "border-studio-border hover:bg-studio-text/10 text-studio-muted"
+                    )}
                   >
                     NIGHT
                   </button>
@@ -1023,7 +1212,7 @@ export default function App() {
               {/* Main Execute Button (Centered) */}
               <div className="flex-1 flex justify-center">
                 <button 
-                  onClick={handleRender}
+                  onClick={() => handleRender()}
                   disabled={rendering || !image}
                   className={cn(
                     "px-5 py-1 text-white text-[11px] font-black tracking-[0.5em] uppercase transition-all flex items-center gap-4 shadow-xl active:scale-95 group border-2 border-transparent rounded-2xl",
@@ -1035,7 +1224,34 @@ export default function App() {
                   ) : (
                     <Coffee className="w-14 h-14 group-hover:rotate-12 transition-transform" />
                   )}
-                  {rendering ? 'CONSTRUCTING...' : selectionRect ? 'RENDER REGION' : 'Render Image'}
+                  {rendering ? (
+                    <div className="relative inline-flex items-center justify-center">
+                      <motion.span 
+                        className="text-white font-black tracking-[0.3em] relative overflow-hidden"
+                        animate={{ 
+                          color: ['#ffffff', '#ef4444', '#ffffff'],
+                        }}
+                        transition={{ 
+                          duration: 2, 
+                          repeat: Infinity, 
+                          ease: "linear" 
+                        }}
+                      >
+                        WAITING
+                        <motion.div 
+                          className="absolute inset-0 bg-gradient-to-r from-transparent via-red-500/40 to-transparent w-1/2 h-full"
+                          animate={{ 
+                            left: ['-100%', '200%'] 
+                          }}
+                          transition={{ 
+                            duration: 1.5, 
+                            repeat: Infinity, 
+                            ease: "easeInOut" 
+                          }}
+                        />
+                      </motion.span>
+                    </div>
+                  ) : selectionRect ? 'RENDER REGION' : 'Render Image'}
                 </button>
               </div>
 
@@ -1070,139 +1286,129 @@ export default function App() {
               </div>
             </div>
 
-            {/* Bottom Output Area (Blue Box in mockup) */}
-              <div className="flex-1 bg-studio-red/[0.03] p-4 flex overflow-hidden">
-                <div className="flex-1 bg-[#924141] relative overflow-hidden flex group border border-white/10 shadow-2xl rounded-2xl">
-                {/* Main Preview (Left) - Increased padding to ~10% */}
-                <div className="flex-1 relative flex items-center justify-center p-[8%] overflow-hidden">
-                  {/* Background texture/grid */}
-                  <div className="absolute inset-0 opacity-10 pointer-events-none" 
-                    style={{ backgroundImage: 'radial-gradient(circle, #ffffff 1px, transparent 1px)', backgroundSize: '30px 30px' }} 
+            {/* Bottom Output Area (Blue Box from mockup) */}
+            <div className="flex-1 bg-studio-bg p-4 flex flex-col overflow-hidden">
+              {error && (
+                <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
+                  <div className="w-6 h-6 bg-red-100 text-red-600 rounded-full flex items-center justify-center shrink-0">!</div>
+                  <p className="text-[10px] font-bold text-red-700 uppercase tracking-tight">{error}</p>
+                  <button onClick={() => setError(null)} className="ml-auto text-[10px] font-black text-red-400 hover:text-red-600">DISMISS</button>
+                </div>
+              )}
+              
+              <div className="flex-1 bg-neutral-900 relative overflow-hidden flex group border border-white/10 shadow-2xl rounded-2xl">
+                {/* Main Viewport */}
+                <div className="flex-1 relative flex items-center justify-center p-4 overflow-hidden">
+                  {/* Background grid */}
+                  <div className="absolute inset-0 opacity-5 pointer-events-none" 
+                    style={{ backgroundImage: 'linear-gradient(#333 1px, transparent 1px), linear-gradient(90deg, #333 1px, transparent 1px)', backgroundSize: '40px 40px' }} 
                   />
                   
                   {renderOutputs.length > 0 ? (
                     <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="relative w-full h-full flex flex-col gap-4 max-w-[1200px] mx-auto"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="w-full h-full flex flex-col"
                     >
-                      <div className="relative flex-1 bg-white shadow-[0_0_100px_rgba(0,0,0,0.5)] overflow-hidden border border-white/20 rounded-xl">
-                        <AnimatePresence mode="wait">
-                          <motion.img 
-                            key={activeVariantIndex}
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            src={renderOutputs[activeVariantIndex]} 
-                            alt={`Render Variant ${activeVariantIndex + 1}`} 
-                            className="w-full h-full object-contain" 
-                          />
-                        </AnimatePresence>
-                        
-                        {/* Status Overlays */}
-                        <div className="absolute top-4 left-4 flex flex-col gap-2">
-                          <div className="bg-studio-red text-white py-1.5 px-4 text-[10px] font-black tracking-widest uppercase shadow-xl flex items-center gap-2">
-                            {renderOutputs[activeVariantIndex] === image ? 'V-REF_ENHANCED' : 'FINAL_AI_RENDER'}
-                            <span className="opacity-50 text-[8px]">VAR_{activeVariantIndex + 1}</span>
-                          </div>
-                          <div className="bg-studio-red/80 text-white/70 py-1 px-3 text-[8px] font-mono backdrop-blur-md border border-white/10 italic">
-                            VISION_ID: {Math.random().toString(36).substr(2, 9).toUpperCase()}
-                          </div>
-                        </div>
-
-                        {/* Variant Switcher Icons */}
-                        {renderOutputs.length > 1 && (
-                          <div className="absolute bottom-4 left-4 flex gap-1.5">
-                            {renderOutputs.map((_, i) => (
+                      <div className={cn(
+                        "grid gap-4 w-full h-full p-2",
+                        renderOutputs.length === 1 ? "grid-cols-1" : 
+                        renderOutputs.length === 2 ? "grid-cols-2" : 
+                        "grid-cols-3"
+                      )}>
+                        {renderOutputs.map((output, i) => (
+                          <motion.div 
+                            key={i}
+                            initial={{ scale: 0.95, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={{ delay: i * 0.1 }}
+                            onClick={() => setActiveVariantIndex(i)}
+                            className={cn(
+                              "relative bg-white shadow-2xl overflow-hidden border transition-all cursor-pointer rounded-xl group/variant",
+                              activeVariantIndex === i ? "border-studio-red ring-2 ring-studio-red" : "border-white/10 opacity-70 hover:opacity-100"
+                            )}
+                          >
+                            <img 
+                              src={output} 
+                              alt={`Render Variant ${i + 1}`} 
+                              className="w-full h-full object-contain" 
+                              referrerPolicy="no-referrer"
+                            />
+                            <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-md text-white text-[8px] font-mono px-2 py-0.5 rounded-lg border border-white/10">
+                              VAR_{i + 1}
+                            </div>
+                            
+                            {/* Hover Actions */}
+                            <div className="absolute bottom-2 right-2 flex gap-2 opacity-0 group-hover/variant:opacity-100 transition-opacity">
                               <button 
-                                key={i}
-                                onClick={() => setActiveVariantIndex(i)}
-                                className={cn(
-                                  "w-8 h-8 border-2 transition-all flex items-center justify-center text-[10px] font-black backdrop-blur-md rounded-lg",
-                                  activeVariantIndex === i 
-                                    ? "bg-studio-red border-white text-white scale-110 shadow-lg" 
-                                    : "bg-black/40 border-white/20 text-white/50 hover:bg-black/60"
-                                )}
+                                onClick={(e) => { e.stopPropagation(); handleDeleteVariant(i, e); }}
+                                className="p-2 bg-studio-muted text-white rounded-lg shadow-lg hover:bg-red-600 transition-colors"
                               >
-                                0{i + 1}
+                                <Trash2 className="w-3 h-3" />
                               </button>
-                            ))}
-                          </div>
-                        )}
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleSave(i); }}
+                                className="p-2 bg-studio-red text-white rounded-lg shadow-lg hover:scale-105 transition-transform"
+                              >
+                                <Download className="w-3 h-3" />
+                              </button>
+                            </div>
 
-                        <div className="absolute bottom-4 right-4 flex items-center gap-3">
-                           <div className="bg-studio-red/50 backdrop-blur-md border border-white/20 p-2 flex gap-4 rounded-xl">
-                             <div className="text-center">
-                               <p className="text-[7px] text-white/40 uppercase font-bold">Samples</p>
-                               <p className="text-[9px] text-white font-mono">1024</p>
-                             </div>
-                             <div className="w-px h-6 bg-white/20" />
-                             <div className="text-center">
-                               <p className="text-[7px] text-white/40 uppercase font-bold">Time</p>
-                               <p className="text-[9px] text-white font-mono">{(1.2 * (activeVariantIndex + 1)).toFixed(1)}s</p>
-                             </div>
-                           </div>
-                        </div>
-
-                        {/* Interactive overlay on hover */}
-                        <div className="absolute inset-0 bg-studio-red/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none mix-blend-overlay" />
-                      </div>
-
-                      <div className="flex items-center justify-end px-4 py-2 border-t border-white/10">
-                        <div className="flex items-center gap-3">
-                          <div className="flex items-center gap-2 bg-studio-red/20 px-3 py-1 border border-studio-red/40">
-                             <div className="w-1.5 h-1.5 bg-studio-red rounded-full animate-pulse shadow-[0_0_8px_#E31837]" />
-                             <span className="text-[9px] font-black text-studio-red uppercase tracking-widest">Live Output Sync</span>
-                          </div>
-                        </div>
+                            {activeVariantIndex === i && (
+                              <div className="absolute inset-0 border-4 border-studio-red/20 pointer-events-none" />
+                            )}
+                          </motion.div>
+                        ))}
                       </div>
                     </motion.div>
                   ) : (
                     <div className="flex flex-col items-center gap-6 text-white/25 group-hover:text-white/35 transition-colors">
                       <div className="relative">
-                      {/* Steam particles */}
-                      {(rendering || renderOutputs.length === 0) && (
-                        <div className="absolute -top-8 left-1/2 -translate-x-1/2 flex gap-1 justify-center w-full">
-                          {[1, 2, 3].map((i) => (
-                            <motion.div
-                              key={i}
-                              initial={{ y: 0, opacity: 0, scale: 0.5 }}
-                              animate={{ 
-                                y: -20, 
-                                opacity: [0, 0.5, 0],
-                                scale: [0.5, 1.2, 0.8],
-                                x: Math.sin(i) * 5
-                              }}
-                              transition={{ 
-                                duration: 1.5, 
-                                repeat: Infinity, 
-                                delay: i * 0.4,
-                                ease: "easeOut"
-                              }}
-                              className="w-1.5 h-4 bg-white/20 rounded-full blur-[2px]"
-                            />
-                          ))}
+                        {/* Steam particles for "Constructing" state */}
+                        {rendering && (
+                          <div className="absolute -top-8 left-1/2 -translate-x-1/2 flex gap-1 justify-center w-full">
+                            {[1, 2, 3].map((i) => (
+                              <motion.div
+                                key={i}
+                                initial={{ y: 0, opacity: 0, scale: 0.5 }}
+                                animate={{ 
+                                  y: -20, 
+                                  opacity: [0, 0.5, 0],
+                                  scale: [0.5, 1.2, 0.8],
+                                  x: Math.sin(i * 1.5) * 5
+                                }}
+                                transition={{ 
+                                  duration: 1.5, 
+                                  repeat: Infinity, 
+                                  delay: i * 0.4,
+                                  ease: "easeOut"
+                                }}
+                                className="w-1.5 h-4 bg-white/20 rounded-full blur-[2px]"
+                              />
+                            ))}
+                          </div>
+                        )}
+                        
+                        <div className="relative">
+                          <Coffee className="w-16 h-16" />
+                          {rendering && (
+                            <motion.div 
+                              initial={{ height: 0 }}
+                              animate={{ height: '100%' }}
+                              transition={{ duration: 3, repeat: Infinity }}
+                              className="absolute bottom-0 left-0 w-full overflow-hidden"
+                            >
+                              <Coffee className="w-16 h-16 text-studio-red drop-shadow-[0_0_15px_rgba(227,24,55,0.4)]" />
+                            </motion.div>
+                          )}
                         </div>
-                      )}
-                      
-                      <Coffee className="w-14 h-14" />
-                      {rendering && (
-                        <motion.div 
-                          initial={{ height: 0 }}
-                          animate={{ height: '100%' }}
-                          transition={{ duration: 2, repeat: Infinity }}
-                          className="absolute bottom-0 left-0 w-full overflow-hidden"
-                        >
-                          <Coffee className="w-14 h-14 text-studio-red" />
-                        </motion.div>
-                      )}
-                    </div>
+                      </div>
                       <div className="text-center space-y-2">
-                        <p className="text-[10px] font-black tracking-[0.4em] uppercase">
-                           {rendering ? 'Synthesizing Architecture' : 'this place still need your creatives'}
+                        <p className="text-[12px] font-black tracking-[0.4em] uppercase">
+                           {rendering ? 'Synthesizing Architecture' : 'Awaiting Design Directives'}
                         </p>
-                        <p className="text-[8px] font-bold tracking-widest opacity-60">
-                           {rendering ? 'Calculating ray-trace trajectories and material reflectance' : 'your direction my render'}
+                        <p className="text-[9px] font-bold tracking-widest opacity-60 max-w-[300px] leading-relaxed mx-auto">
+                           {rendering ? 'Calculating ray-trace trajectories and material reflectance protocols' : 'Configure your render engine parameters and submit for studio processing'}
                         </p>
                       </div>
                     </div>
@@ -1212,7 +1418,7 @@ export default function App() {
                 {/* Actions Sidebar (Right - Vertical Blue Outline area from mockup) */}
                 <div className="w-16 border-l border-white/5 bg-studio-red/20 backdrop-blur-md flex flex-col items-center py-8 gap-4 z-20">
                   <button 
-                    onClick={handleSave} 
+                    onClick={() => handleSave()} 
                     disabled={renderOutputs.length === 0}
                     className={cn(
                       "w-11 h-11 flex flex-col items-center justify-center rounded-xl transition-all shadow-xl active:scale-90 group relative",
@@ -1305,19 +1511,20 @@ export default function App() {
                        {/* 3D Viewport Wrapper */}
                        <div className="relative aspect-[3/4] bg-studio-bg rounded-2xl border border-studio-border overflow-hidden group shadow-inner">
                           {isProcessingIfc ? (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-studio-bg/80 backdrop-blur-sm z-20">
-                               <div className="relative w-20 h-20 mb-4">
-                                  <motion.div 
-                                    animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
-                                    transition={{ duration: 2, repeat: Infinity }}
-                                    className="absolute inset-0 bg-studio-red/20 rounded-full"
-                                  />
+                            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-studio-bg/90 backdrop-blur-md z-20">
+                               <div className="relative w-20 h-20 mb-6">
+                                  <svg className="w-full h-full -rotate-90">
+                                    <circle cx="40" cy="40" r="36" stroke="currentColor" strokeWidth="4" fill="transparent" className="text-studio-border" />
+                                    <circle cx="40" cy="40" r="36" stroke="currentColor" strokeWidth="4" fill="transparent" strokeDasharray={226} strokeDashoffset={226 - (226 * ifcProgress) / 100} className="text-studio-red transition-all duration-300" />
+                                  </svg>
                                   <div className="absolute inset-0 flex items-center justify-center">
-                                     <div className="w-10 h-10 border-2 border-studio-red border-t-transparent rounded-full animate-spin" />
+                                     <span className="text-[12px] font-black text-studio-black">{ifcProgress}%</span>
                                   </div>
                                </div>
-                               <p className="text-[10px] font-black text-studio-red uppercase tracking-[0.2em] animate-pulse">Analyzing Geometry...</p>
-                               <p className="text-[8px] text-studio-muted font-bold mt-1 uppercase">Correlating vision with BIM data</p>
+                               <p className="text-[10px] font-black text-studio-red uppercase tracking-[0.2em] animate-pulse">
+                                 {ifcProgress < 40 ? 'Reading Geometry...' : ifcProgress < 80 ? 'Parsing BIM Data...' : 'Correlating Vision...'}
+                               </p>
+                               <p className="text-[8px] text-studio-muted font-bold mt-1 uppercase">Advanced IFC Extraction Active</p>
                             </div>
                           ) : (
                             <motion.div 
@@ -1585,7 +1792,7 @@ export default function App() {
         ref={fileInputRef} 
         onChange={handleFileChange} 
         className="hidden" 
-        accept="image/*" 
+        accept="image/*,.pdf,.doc,.docx,.txt" 
       />
 
       <input 
@@ -1593,7 +1800,8 @@ export default function App() {
         ref={refFileInputRef} 
         onChange={handleRefFileChange} 
         className="hidden" 
-        accept="image/*" 
+        multiple
+        accept="image/*,.pdf,.doc,.docx,.txt" 
       />
 
       <input 
@@ -1602,7 +1810,7 @@ export default function App() {
         onChange={handleDocChange} 
         className="hidden" 
         multiple
-        accept=".pdf,.doc,.docx,.txt" 
+        accept=".pdf,.doc,.docx,.txt,image/*" 
       />
 
       <input 
