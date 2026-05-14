@@ -21,9 +21,15 @@ export class ArchitectureService {
 
   private get ai(): GoogleGenAI {
     if (!this.aiInstance) {
-      const apiKey = process.env.GEMINI_API_KEY;
+      // In Vite, environment variables for client-side are prefixed with VITE_
+      // AI Studio uses process.env.GEMINI_API_KEY
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || 
+                     (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : undefined);
+      
       if (!apiKey) {
-        throw new Error("GEMINI_API_KEY is missing. Please configure it in your environment variables.");
+        console.warn("GEMINI_API_KEY is missing. AI features will be disabled. Check your environment variables.");
+        // We throw a delayed error only when used, or just handle null
+        return null as any; 
       }
       this.aiInstance = new GoogleGenAI({ apiKey });
     }
