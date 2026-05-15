@@ -17,19 +17,14 @@ export interface AnalysisResult {
 }
 
 export class ArchitectureService {
-  private aiInstance: GoogleGenAI | null = null;
-
   private get ai(): GoogleGenAI {
-    if (!this.aiInstance) {
-      const apiKey = (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : undefined) || 
-                     (import.meta as any).env.VITE_GEMINI_API_KEY;
-      
-      if (!apiKey) {
-        throw new Error("GEMINI_API_KEY is missing. Please set it in your environment variables via the Settings menu.");
-      }
-      this.aiInstance = new GoogleGenAI({ apiKey });
+    const apiKey = (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : undefined) || 
+                   (import.meta as any).env.VITE_GEMINI_API_KEY;
+    
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY is missing. Please set it in your environment variables via the Settings menu.");
     }
-    return this.aiInstance;
+    return new GoogleGenAI({ apiKey });
   }
 
   async analyzeImage(base64Image: string, mimeType: string, lang: 'EN' | 'VI' = 'EN'): Promise<string> {
@@ -262,14 +257,17 @@ Do not use markdown formatting like \`\`\`json. Return only valid JSON.`
         
         parts.push({ text: prompt });
 
+        const config: any = {};
+        if (model.toLowerCase().includes('image')) {
+          config.imageConfig = {
+            aspectRatio: aspectRatio as any,
+          };
+        }
+
         const response = await this.ai.models.generateContent({
           model: model,
           contents: [{ parts }],
-          config: {
-            imageConfig: {
-              aspectRatio: aspectRatio as any,
-            },
-          },
+          config: Object.keys(config).length > 0 ? config : undefined,
         });
 
         if (!response.candidates || response.candidates.length === 0) {

@@ -1,10 +1,52 @@
 import { useState, useRef, ChangeEvent, useEffect } from 'react';
-import { Upload, Image as ImageIcon, Sparkles, Building2, Layers, SunMedium, Palette, ChevronLeft, Download, Plus, Trash2, Send, Folder, FileText, MessageSquare, Coffee, Lightbulb, Timer, ChevronDown, LayoutGrid } from 'lucide-react';
+import { Upload, Image as ImageIcon, Sparkles, Building2, Layers, SunMedium, Palette, ChevronLeft, Download, Plus, Trash2, Send, Folder, FileText, MessageSquare, Coffee, Lightbulb, Timer, ChevronDown, LayoutGrid, Maximize2, ImagePlus, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { architectureService } from './services/architectureService.ts';
 import { cn } from './lib/utils.ts';
 import BimViewer from './components/BimViewer.tsx';
+
+const AnimatedCoffee = ({ className, rendering }: { className?: string, rendering?: boolean }) => {
+  return (
+    <svg 
+      xmlns="http://www.w3.org/2000/svg" 
+      viewBox="0 0 24 24" 
+      fill="none" 
+      stroke="currentColor" 
+      strokeWidth="2" 
+      strokeLinecap="round" 
+      strokeLinejoin="round" 
+      className={className}
+    >
+      <path d="M17 8h1a4 4 0 1 1 0 8h-1" />
+      <path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z" />
+      
+      {/* Interactive smoke effect */}
+      {[
+        { x: 6, delay: 0 },
+        { x: 10, delay: 0.6 },
+        { x: 14, delay: 1.2 }
+      ].map((smoke, i) => (
+        <motion.path
+          key={i}
+          d={`M${smoke.x} 5 C${smoke.x - 2} 3, ${smoke.x + 2} 1, ${smoke.x} -1`}
+          initial={{ pathLength: 0, opacity: 0, pathOffset: 0 }}
+          animate={{ 
+            pathLength: [0, 0.5, 0.5, 0],
+            pathOffset: [0, 0, 0.5, 1],
+            opacity: [0, 0.6, 0.6, 0]
+          }}
+          transition={{ 
+            duration: 2.5, 
+            repeat: Infinity, 
+            delay: smoke.delay, 
+            ease: "easeInOut" 
+          }}
+        />
+      ))}
+    </svg>
+  );
+};
 
 /**
  * @license
@@ -96,10 +138,13 @@ export default function App() {
 
   const canvasRef = useRef<HTMLDivElement>(null);
 
-  const handleSelectionStart = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isSelectingRegion || !canvasRef.current) return;
+  const handleSelectionStart = (e: React.MouseEvent | React.TouchEvent, canvasType: 'source' | 'result') => {
+    if (!isSelectingRegion) return;
     
-    const rect = canvasRef.current.getBoundingClientRect();
+    setActiveSelectionCanvas(canvasType);
+    
+    const container = e.currentTarget as HTMLDivElement;
+    const rect = container.getBoundingClientRect();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
     
@@ -359,10 +404,12 @@ export default function App() {
   const [selectedAspectRatio, setSelectedAspectRatio] = useState('1:1');
   const [isSelectingRegion, setIsSelectingRegion] = useState(false);
   const [selectionRect, setSelectionRect] = useState<{x: number, y: number, w: number, h: number} | null>(null);
+  const [activeSelectionCanvas, setActiveSelectionCanvas] = useState<'source' | 'result'>('source');
   const [variantsCount, setVariantsCount] = useState(1);
   const [renderOutputs, setRenderOutputs] = useState<string[]>([]);
   const [activeVariantIndex, setActiveVariantIndex] = useState(0);
   const [rendering, setRendering] = useState(false);
+  const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [activeParams, setActiveParams] = useState({ lighting: 'Day' });
   
   const handleRender = async (lightingOverride?: 'Day' | 'Night') => {
@@ -376,6 +423,15 @@ export default function App() {
       setActiveParams(prev => ({ ...prev, lighting: lightingOverride }));
     }
     
+    // API key check
+    if ((window as any).aistudio && (window as any).aistudio.hasSelectedApiKey) {
+      if (!(await (window as any).aistudio.hasSelectedApiKey())) {
+        await (window as any).aistudio.openSelectKey();
+      }
+    }
+
+    const baseImageToRender = (activeSelectionCanvas === 'result' && renderOutputs.length > 0 && selectionRect) ? renderOutputs[activeVariantIndex] : image;
+
     setRendering(true);
     setRenderOutputs([]);
     setActiveVariantIndex(0);
@@ -418,7 +474,7 @@ export default function App() {
           
           const output = await architectureService.generateRenderImage(
             variantPrompt,
-            image, 
+            baseImageToRender, 
             'image/jpeg',
             selectedModel,
             selectedAspectRatio
@@ -450,7 +506,7 @@ export default function App() {
       }
       
       if (errorMessage.includes("403") || errorMessage.toLowerCase().includes("permission")) {
-        setError("Access Denied (403): Your API Key does not have permission to use this model. You may need to enable billing in Google Cloud.");
+        setError(`Access Denied (403): Your API Key does not have permission to use the ${selectedModel} model. We recommend changing it to Imagen 3 (Standard) or you may need to enable billing in Google Cloud or use an allowlisted key.`);
       } else if (errorMessage.includes("API key")) {
         setError("API Key Error: Please ensure you have enabled the required model APIs in Google AI Studio.");
       } else if (errorMessage.includes("quota") || errorMessage.includes("429")) {
@@ -460,7 +516,15 @@ export default function App() {
       } else if (errorMessage.toLowerCase().includes("location is not supported") || errorMessage.toLowerCase().includes("region")) {
         setError(`Region Error: This AI model is not yet available in your current location. Please try a different model or check availability in Google AI Studio.`);
       } else if (errorMessage.includes("model not found") || errorMessage.includes("not found")) {
-        setError(`Model error: The selected AI model (${selectedModel}) might not be available yet in this region.`);
+        // Reset key selection if available
+        if ((window as any).aistudio && (window as any).aistudio.openSelectKey) {
+           setError("Model error: The selected AI model configuration requires an API key update. Please try again to trigger key selection.");
+           setTimeout(() => {
+             (window as any).aistudio.openSelectKey();
+           }, 100);
+        } else {
+           setError(`Model error: The selected AI model (${selectedModel}) might not be available yet in this region.`);
+        }
       } else if (errorMessage.includes("safety")) {
         setError("Safety Filter: The prompt or image triggered safety restrictions. Please try a different design.");
       } else {
@@ -536,15 +600,46 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col font-sans text-studio-text overflow-hidden">
+      {/* Fullscreen Image Modal */}
+      <AnimatePresence>
+        {fullscreenImage && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-8 bg-black/90 backdrop-blur-sm shadow-2xl"
+            onClick={() => setFullscreenImage(null)}
+          >
+            <div className="relative w-full h-full max-w-7xl max-h-[90vh]">
+               <button 
+                 onClick={(e) => { e.stopPropagation(); setFullscreenImage(null); }}
+                 className="absolute -top-4 -right-4 p-2 bg-white/10 text-white rounded-full hover:bg-white/20 z-50 shadow-xl"
+               >
+                 <X className="w-5 h-5" />
+               </button>
+               <img 
+                 src={fullscreenImage} 
+                 alt="Fullscreen" 
+                 className="w-full h-full object-contain drop-shadow-2xl"
+                 referrerPolicy="no-referrer"
+               />
+               <div className="absolute top-4 left-4 bg-black/60 px-3 py-1.5 rounded-lg text-white font-mono text-[10px] tracking-widest border border-white/10 shadow-lg">
+                 INSPECT_MODE
+               </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <header className="h-16 px-4 border-b border-studio-border bg-white flex items-center justify-between z-50">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <div className="w-[56px] h-[56px] flex items-center justify-center p-0.5">
               <img 
-                src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/Highlands_Coffee_5G.svg/3840px-Highlands_Coffee_5G.svg.png" 
+                src="https://img.gotit.vn/compress/brand/1715330504_v0erA.png" 
                 alt="Highlands Logo" 
-                className="w-full h-full object-contain"
+                className="w-full h-full object-contain drop-shadow-sm"
                 referrerPolicy="no-referrer"
               />
             </div>
@@ -855,8 +950,8 @@ export default function App() {
               <div className="flex-1 bg-[#F5F5F5] relative group flex flex-col">
                 <div 
                   ref={canvasRef}
-                  onMouseDown={handleSelectionStart}
-                  onTouchStart={handleSelectionStart}
+                  onMouseDown={(e) => handleSelectionStart(e, 'source')}
+                  onTouchStart={(e) => handleSelectionStart(e, 'source')}
                   className={cn(
                     "flex-1 relative overflow-hidden flex items-center justify-center p-2",
                     isSelectingRegion && "cursor-crosshair"
@@ -869,10 +964,9 @@ export default function App() {
                       className="relative w-full h-full flex items-center justify-center select-none"
                     >
                       <img src={image} alt="Source" className="max-w-full max-h-full object-contain shadow-2xl pointer-events-none" referrerPolicy="no-referrer" />
-                      <div className="absolute top-2 left-2 px-2 py-1 bg-black/40 text-[7px] text-white font-mono uppercase tracking-[0.3em] backdrop-blur-sm border border-white/10">Source_Canvas</div>
                       
                       {/* Selection Overlay */}
-                      {selectionRect && (
+                      {activeSelectionCanvas === 'source' && selectionRect && (
                         <div 
                           className="absolute border-2 border-cyan-500 bg-cyan-500/10 shadow-[0_0_20px_rgba(6,182,212,0.3)]"
                           style={{
@@ -1062,34 +1156,44 @@ export default function App() {
               {/* Part A: Basic Controls */}
               <div className="w-[180px] flex flex-col gap-4">
                 <div className="space-y-1">
-                  <span className="text-[8px] font-black text-studio-muted uppercase tracking-widest">Render Engine</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[8px] font-black text-studio-muted uppercase tracking-widest">Render Engine</span>
+                  </div>
                   <select 
                     value={selectedModel}
                     onChange={(e) => setSelectedModel(e.target.value)}
                     className="w-full px-2 py-1.5 border border-studio-border text-[9px] font-bold focus:border-studio-red outline-none rounded-lg"
                   >
                     <option value="gemini-2.5-flash-image">Gemini Flash Image (Fast)</option>
-                    <option value="gemini-3.1-flash-image-preview">Imagen 3 Vision (HQ)</option>
-                    <option value="imagen-3.0-generate-001">Imagen 3 (Direct Render)</option>
+                    <option value="gemini-3.1-flash-image-preview">Nano Banana 2 (Preview)</option>
+                    <option value="imagen-3.0-generate-002">Imagen 3 (Standard)</option>
+                    <option value="imagen-3.0-fast-generate-001">Imagen 3 (Fast)</option>
                     <option value="gemini-3-flash-preview">Gemini 3 Flash (Context Only)</option>
                   </select>
                 </div>
                 
-                <div className="space-y-1">
+                <div className="space-y-1 w-full flex-shrink-0 min-w-0">
                   <span className="text-[8px] font-black text-studio-muted uppercase tracking-widest block">Aspect Ratio</span>
-                  <div className="flex gap-1 justify-start">
-                    {['16:9', '4:3', '1:1'].map(r => (
+                  <div className="flex justify-between items-center w-full mt-2">
+                    {[
+                      { value: '1:1', w: 'w-3.5', h: 'h-3.5' },
+                      { value: '9:16', w: 'w-2', h: 'h-4' },
+                      { value: '16:9', w: 'w-4', h: 'h-2' },
+                      { value: '3:4', w: 'w-[10px]', h: 'h-3.5' },
+                      { value: '4:3', w: 'w-3.5', h: 'h-[10px]' }
+                    ].map(r => (
                       <button 
-                        key={r} 
-                        onClick={() => setSelectedAspectRatio(r)}
+                        key={r.value} 
+                        onClick={() => setSelectedAspectRatio(r.value)}
                         className={cn(
-                          "px-2 py-1 border text-[8px] font-mono transition-all rounded-lg",
-                          selectedAspectRatio === r 
-                            ? "bg-studio-red border-studio-red text-white" 
-                            : "border-studio-border hover:bg-studio-red hover:text-white hover:border-studio-red"
+                          "px-1 py-1.5 border flex flex-col items-center justify-center gap-1.5 transition-all rounded-lg min-w-[32px]",
+                          selectedAspectRatio === r.value 
+                            ? "bg-[#e8effd] border-transparent text-[#0b57d0]" 
+                            : "border-transparent hover:bg-studio-red/10 hover:text-studio-red text-studio-muted"
                         )}
                       >
-                        {r}
+                         <div className={cn("border-2 border-current rounded-sm", r.w, r.h)} />
+                        <span className="text-[9px] font-medium leading-none">{r.value}</span>
                       </button>
                     ))}
                   </div>
@@ -1326,23 +1430,76 @@ export default function App() {
                             animate={{ scale: 1, opacity: 1 }}
                             transition={{ delay: i * 0.1 }}
                             onClick={() => setActiveVariantIndex(i)}
+                            onMouseDown={(e) => {
+                               if (activeVariantIndex === i) {
+                                   handleSelectionStart(e, 'result');
+                               }
+                            }}
+                            onTouchStart={(e) => {
+                               if (activeVariantIndex === i) {
+                                   handleSelectionStart(e, 'result');
+                               }
+                            }}
                             className={cn(
-                              "relative bg-white shadow-2xl overflow-hidden border transition-all cursor-pointer rounded-xl group/variant",
-                              activeVariantIndex === i ? "border-studio-red ring-2 ring-studio-red" : "border-white/10 opacity-70 hover:opacity-100"
+                              "relative bg-white shadow-2xl overflow-hidden border transition-all cursor-pointer rounded-xl group/variant w-full h-full flex items-center justify-center",
+                              activeVariantIndex === i ? "border-studio-red ring-2 ring-studio-red" : "border-white/10 opacity-70 hover:opacity-100",
+                              isSelectingRegion && activeVariantIndex === i ? "cursor-crosshair" : ""
                             )}
                           >
                             <img 
                               src={output} 
                               alt={`Render Variant ${i + 1}`} 
-                              className="w-full h-full object-contain" 
+                              className="max-w-full max-h-full object-contain pointer-events-none" 
                               referrerPolicy="no-referrer"
                             />
+                            
+                            {/* Result Selection Overlay */}
+                            {activeSelectionCanvas === 'result' && selectionRect && activeVariantIndex === i && (
+                              <div 
+                                className="absolute border-2 border-cyan-500 bg-cyan-500/10 shadow-[0_0_20px_rgba(6,182,212,0.3)] pointer-events-none"
+                                style={{
+                                  left: `${selectionRect.w < 0 ? selectionRect.x + selectionRect.w : selectionRect.x}%`,
+                                  top: `${selectionRect.h < 0 ? selectionRect.y + selectionRect.h : selectionRect.y}%`,
+                                  width: `${Math.abs(selectionRect.w)}%`,
+                                  height: `${Math.abs(selectionRect.h)}%`,
+                                }}
+                              >
+                                <div className="absolute -top-6 left-0 bg-cyan-500 text-white text-[7px] font-black px-2 py-0.5 uppercase tracking-widest whitespace-nowrap">Selected Region</div>
+                                
+                                {/* Corner markers */}
+                                <div className="absolute top-0 left-0 w-1.5 h-1.5 bg-white border border-cyan-500 -translate-x-1/2 -translate-y-1/2" />
+                                <div className="absolute top-0 right-0 w-1.5 h-1.5 bg-white border border-cyan-500 translate-x-1/2 -translate-y-1/2" />
+                                <div className="absolute bottom-0 left-0 w-1.5 h-1.5 bg-white border border-cyan-500 -translate-x-1/2 translate-y-1/2" />
+                                <div className="absolute bottom-0 right-0 w-1.5 h-1.5 bg-white border border-cyan-500 translate-x-1/2 translate-y-1/2" />
+                              </div>
+                            )}
+
                             <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-md text-white text-[8px] font-mono px-2 py-0.5 rounded-lg border border-white/10">
                               VAR_{i + 1}
                             </div>
                             
                             {/* Hover Actions */}
                             <div className="absolute bottom-2 right-2 flex gap-2 opacity-0 group-hover/variant:opacity-100 transition-opacity">
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); setFullscreenImage(output); }}
+                                className="p-2 bg-studio-muted text-white rounded-lg shadow-lg hover:bg-neutral-600 transition-colors"
+                                title="View Fullscreen"
+                              >
+                                <Maximize2 className="w-3 h-3" />
+                              </button>
+                              <button 
+                                onClick={(e) => { 
+                                   e.stopPropagation(); 
+                                   if (!assets.includes(output)) {
+                                       setAssets(prev => [output, ...prev]);
+                                   }
+                                   setImage(output);
+                                }}
+                                className="p-2 bg-studio-muted text-white rounded-lg shadow-lg hover:bg-blue-600 transition-colors"
+                                title="Set as Source Image"
+                              >
+                                <ImagePlus className="w-3 h-3" />
+                              </button>
                               <button 
                                 onClick={(e) => { e.stopPropagation(); handleDeleteVariant(i, e); }}
                                 className="p-2 bg-studio-muted text-white rounded-lg shadow-lg hover:bg-red-600 transition-colors"
@@ -1352,6 +1509,7 @@ export default function App() {
                               <button 
                                 onClick={(e) => { e.stopPropagation(); handleSave(i); }}
                                 className="p-2 bg-studio-red text-white rounded-lg shadow-lg hover:scale-105 transition-transform"
+                                title="Save to Device"
                               >
                                 <Download className="w-3 h-3" />
                               </button>
@@ -1365,50 +1523,23 @@ export default function App() {
                       </div>
                     </motion.div>
                   ) : (
-                    <div className="flex flex-col items-center gap-6 text-white/25 group-hover:text-white/35 transition-colors">
+                    <div className="flex flex-col items-center gap-6 group">
                       <div className="relative">
-                        {/* Steam particles for "Constructing" state */}
+                        <AnimatedCoffee className="w-16 h-16 text-white opacity-25 group-hover:opacity-35 transition-opacity" rendering={rendering} />
                         {rendering && (
-                          <div className="absolute -top-8 left-1/2 -translate-x-1/2 flex gap-1 justify-center w-full">
-                            {[1, 2, 3].map((i) => (
-                              <motion.div
-                                key={i}
-                                initial={{ y: 0, opacity: 0, scale: 0.5 }}
-                                animate={{ 
-                                  y: -20, 
-                                  opacity: [0, 0.5, 0],
-                                  scale: [0.5, 1.2, 0.8],
-                                  x: Math.sin(i * 1.5) * 5
-                                }}
-                                transition={{ 
-                                  duration: 1.5, 
-                                  repeat: Infinity, 
-                                  delay: i * 0.4,
-                                  ease: "easeOut"
-                                }}
-                                className="w-1.5 h-4 bg-white/20 rounded-full blur-[2px]"
-                              />
-                            ))}
-                          </div>
+                          <motion.div 
+                            initial={{ height: 0 }}
+                            animate={{ height: '100%' }}
+                            transition={{ duration: 3, repeat: Infinity }}
+                            className="absolute bottom-0 left-0 w-full overflow-hidden"
+                          >
+                            <AnimatedCoffee className="w-16 h-16 text-studio-red drop-shadow-[0_0_15px_rgba(227,24,55,0.4)]" rendering={rendering} />
+                          </motion.div>
                         )}
-                        
-                        <div className="relative">
-                          <Coffee className="w-16 h-16" />
-                          {rendering && (
-                            <motion.div 
-                              initial={{ height: 0 }}
-                              animate={{ height: '100%' }}
-                              transition={{ duration: 3, repeat: Infinity }}
-                              className="absolute bottom-0 left-0 w-full overflow-hidden"
-                            >
-                              <Coffee className="w-16 h-16 text-studio-red drop-shadow-[0_0_15px_rgba(227,24,55,0.4)]" />
-                            </motion.div>
-                          )}
-                        </div>
                       </div>
-                      <div className="text-center space-y-2">
+                      <div className="text-center space-y-2 text-white/25 group-hover:text-white/35 transition-colors">
                         <p className="text-[12px] font-black tracking-[0.4em] uppercase">
-                           {rendering ? 'Synthesizing Architecture' : 'Awaiting Design Directives'}
+                           {rendering ? 'Synthesizing Architecture' : 'Your Creative my Visual'}
                         </p>
                         <p className="text-[9px] font-bold tracking-widest opacity-60 max-w-[300px] leading-relaxed mx-auto">
                            {rendering ? 'Calculating ray-trace trajectories and material reflectance protocols' : 'Configure your render engine parameters and submit for studio processing'}
